@@ -4,19 +4,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "Swift-Lens",
+    name: "Swift-Data-Lens",
     platforms: [
         .macOS(.v13), .iOS(.v16), .tvOS(.v16), .watchOS(.v9), .macCatalyst(.v16),
     ],
     products: [
-        .library(name: "Swift-Lens",targets: ["Swift-Lens"]),
+        .library(name: "Data-Lens", targets: ["Swift-Data-Lens"]),
     ],
     targets: [
         .target(
-            name: "Swift-Lens"),
+            name: "Swift-Data-Lens"),
         .testTarget(
             name: "Swift-LensTests",
-            dependencies: ["Swift-Lens"]
+            dependencies: ["Swift-Data-Lens"]
         ),
     ]
 )
