@@ -4,7 +4,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "Swift-Data-Lens",
+    name: "Swift-DataLens",
     platforms: [
         .macOS(.v13), .iOS(.v16), .tvOS(.v16), .watchOS(.v9), .macCatalyst(.v16),
     ],
