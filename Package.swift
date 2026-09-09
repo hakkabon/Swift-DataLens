@@ -9,14 +9,23 @@ let package = Package(
         .macOS(.v13), .iOS(.v16), .tvOS(.v16), .watchOS(.v9), .macCatalyst(.v16),
     ],
     products: [
-        .library(name: "Data-Lens", targets: ["Swift-Data-Lens"]),
+        .library(name: "DataLens", targets: ["DataLens"]),
     ],
     targets: [
         .target(
-            name: "Swift-Data-Lens"),
+            name: "DataLens",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]
+        ),
         .testTarget(
-            name: "Swift-LensTests",
-            dependencies: ["Swift-Data-Lens"]
+            name: "DataLensTests",
+            dependencies: ["DataLens"]
+        ),
+        .executableTarget(
+            name: "Benchmarks",
+            dependencies: ["DataLens"],
+            path: "Benchmarks"
         ),
     ]
 )

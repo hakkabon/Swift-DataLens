@@ -1,0 +1,17 @@
+disabled_rules:
+  - trailing_whitespace
+  - line_length # handled by SwiftFormat maxwidth
+opt_in_rules:
+  - empty_count
+  - empty_string
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - redundant_nil_coalescing
+  - unneeded_parentheses_in_closure_argument
+
+force_unwrapping:
+  severity: warning # tests use ! sparingly; audit before release
+
+excluded:
+  - .build
+  - .swiftpm
