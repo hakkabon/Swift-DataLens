@@ -1,4 +1,4 @@
-# Swift-Data-Lens
+# Swift-DataLens
 
 Local regression in pure Swift — `import DataLens`.
 
@@ -12,8 +12,10 @@ Local regression in pure Swift — `import DataLens`.
 - **LOESS (Cleveland 1979 / Cleveland–Devlin 1988):** local polynomials
   (deg 0–2, tricube weights, spans, 1-D + multivariate), bisquare
   robustness rounds, equivalent-kernel SEs, smoother trace, GCV span
-  selection — self-contained, brute-force neighbors behind a kd-tree-ready
-  seam.
+  selection — self-contained, neighbors via a build-once kd-tree (large n,
+  small spans) or brute force, exactly equal on every path; least squares
+  via LAPACK (`NumericCoreAccelerate`) on Apple platforms with a vendored
+  Householder fallback elsewhere.
 - **Adaptive smoothing (Loader-style, clean-room):** variable bandwidths,
   local likelihood families — new types, no change to classic `Loess`
   without a `docs/DECISIONS.md` entry.
@@ -29,7 +31,7 @@ Local regression in pure Swift — `import DataLens`.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/hakkabon/Swift-Data-Lens.git", from: "0.1.0")
+    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.1.0")
 ],
 targets: [
     .target(name: "MyTarget", dependencies: ["DataLens"])
@@ -37,8 +39,8 @@ targets: [
 ```
 
 ```bash
-git clone https://github.com/hakkabon/Swift-Data-Lens.git
-cd Swift-Data-Lens
+git clone https://github.com/hakkabon/Swift-DataLens.git
+cd Swift-DataLens
 swift build
 swift test
 ```
@@ -62,10 +64,14 @@ swift test
 swift test --filter DataLensTests
 ```
 
-10 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+20 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
-recovery, symmetry, SE/trace bounds, GCV span selection, invalid input)
-plus a version smoke test (full suite ≈ 1s in debug).
+recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
+`NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
+clouds with duplicates, coincident queries, degenerate inputs, mixed
+tree/brute paths), `SolverSeamTests` (closed-form solves plus the
+rank-deficient/singular/non-PD → nil contract, on whichever solver path
+is active) plus a version smoke test (full suite ≈ 1s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -89,7 +95,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       ├── Loess.swift
 │       ├── Internal
 │       │   ├── Descriptive.swift (median)
+│       │   ├── KDTree.swift (N-D kd-tree, exact brute-force parity)
 │       │   ├── LinAlg.swift (Householder QR + least squares)
+│       │   ├── NeighborSearch.swift (build-once routing: tree vs brute)
 │       │   ├── Regression.swift (square solver)
 │       │   └── SeededRNG.swift (test-only RNG + GaussianCache)
 │       └── DataLens.docc
@@ -97,7 +105,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 └── Tests
     └── DataLensTests
         ├── DataLensTests.swift
-        └── LoessTests.swift
+        ├── LoessTests.swift
+        ├── NearestNeighborTests.swift
+        └── SolverSeamTests.swift
 ```
 
 ## Known limitations / next steps

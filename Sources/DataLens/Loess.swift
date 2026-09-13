@@ -5,9 +5,11 @@ import Foundation
 /// with bisquare robustness iterations.
 ///
 /// Self-contained by design: weighted least squares go through ``LinAlg`` and
-/// neighbor search is brute force behind the internal
-/// ``Loess/nearestIndices(to:count:)`` seam, where a kd-tree can drop in
-/// later (as can a Swift-Numerics matrix backend) without touching call sites.
+/// neighbor search goes through the internal `NeighborSearch` (kd-tree past
+/// a small-n threshold, brute force below; exact agreement proven by
+/// `NearestNeighborTests`), with ``Loess/nearestIndices(to:count:)`` kept as
+/// the brute-force reference (as can a Swift-Numerics matrix backend bind to
+/// the solver seam without touching call sites).
 public enum LoessWeight: Sendable {
     /// Tricube (Cleveland's default): (1−u³)³ on [0,1).
     case tricube
@@ -67,7 +69,7 @@ public struct Loess: Sendable {
     }
 
     /// Indices of the `count` nearest training rows to `x` (brute force;
-    /// the seam a kd-tree will replace). Sorted nearest-first.
+    /// the reference `NeighborSearch` must match exactly). Sorted nearest-first.
     static func nearestIndices(_ trainX: [[Double]], to x: [Double], count: Int) -> [Int] {
         let k = min(max(count, 1), trainX.count)
         let dists = trainX.map { row in
@@ -90,6 +92,9 @@ public struct Loess: Sendable {
         let q = 1 + (degree >= 1 ? p : 0) + (degree >= 2 ? p * (p + 1) / 2 : 0)
         let k = min(n, max(Int(ceil(span * Double(n))), q + 1))
         guard k > 1 else { return nil }
+        // One neighbor index per fit (not per query): the tree build is
+        // O(n log n), so rebuilding it per local fit would lose to brute force.
+        let search = NeighborSearch(trainX: trainX)
         var robust = [Double](repeating: 1, count: n)
         var fitted = [Double](repeating: 0, count: n)
         // Scale floor: once the fit is (near-)exact, MAD → 0 and an unguarded
@@ -98,7 +103,7 @@ public struct Loess: Sendable {
         let yScale = max(Descriptive.median(trainY.map { abs($0 - medY) }) ?? 0, 1e-300)
         for _ in 0...robustIterations {
             for i in 0..<n {
-                fitted[i] = Loess.localFit(trainX: trainX, trainY: trainY, degree: degree,
+                fitted[i] = Loess.localFit(search: search, trainY: trainY, degree: degree,
                                            at: trainX[i], neighborhood: k, robust: robust).value
             }
             let resid = zip(trainY, fitted).map { abs($0 - $1) }
@@ -109,7 +114,7 @@ public struct Loess: Sendable {
         // Final pass with diagnostics (weights[i] = own locality (=1) × robustness).
         var trace = 0.0
         for i in 0..<n {
-            let r = Loess.localFit(trainX: trainX, trainY: trainY, degree: degree,
+            let r = Loess.localFit(search: search, trainY: trainY, degree: degree,
                                    at: trainX[i], neighborhood: k, robust: robust, trackIndex: i)
             fitted[i] = r.value
             trace += r.leverage
@@ -128,10 +133,11 @@ public struct Loess: Sendable {
     }
 
     /// Local fit at `x`: value + own-leverage (for the smoother trace).
-    static func localFit(trainX: [[Double]], trainY: [Double], degree: Int,
+    static func localFit(search: NeighborSearch, trainY: [Double], degree: Int,
                          at x: [Double], neighborhood k: Int, robust: [Double],
                          trackIndex: Int? = nil) -> (value: Double, leverage: Double) {
-        let nb = Loess.nearestIndices(trainX, to: x, count: k)
+        let trainX = search.trainingPoints
+        let nb = search.nearest(to: x, count: k)
         let h = Loess.bandwidth(trainX: trainX, indices: nb, at: x)
         // Locality weights first (robustness applied after, so a degenerate
         // combined set can still fall back to a bounded local mean — never to
@@ -200,7 +206,9 @@ public struct Loess: Sendable {
     public func predict(_ x: [Double]) -> Double {
         guard x.count == trainX[0].count else { return .nan }
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
-        return Loess.localFit(trainX: trainX, trainY: trainY, degree: degree,
+        // Single-shot query: skip the tree build (see NeighborSearch).
+        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        return Loess.localFit(search: search, trainY: trainY, degree: degree,
                               at: x, neighborhood: k, robust: weights).value
     }
 
@@ -208,7 +216,9 @@ public struct Loess: Sendable {
     public func standardError(at x: [Double]) -> Double? {
         guard x.count == trainX[0].count else { return nil }
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
-        let nb = Loess.nearestIndices(trainX, to: x, count: k)
+        // Single-shot query: skip the tree build (see NeighborSearch).
+        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let nb = search.nearest(to: x, count: k)
         let h = Loess.bandwidth(trainX: trainX, indices: nb, at: x)
         var rows: [[Double]] = [], ws: [Double] = []
         for j in nb {

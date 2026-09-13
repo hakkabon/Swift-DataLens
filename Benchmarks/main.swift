@@ -12,7 +12,8 @@ func bench(_ label: String, iterations: Int = 100_000, warmup: Int = 1000, _ bod
     for _ in 0..<iterations { body() }
     let ms = Date().timeIntervalSince(start) * 1000
     let padded = label.padding(toLength: 28, withPad: " ", startingAt: 0)
-    print(String(format: "%@ %8.1f ms / %d draws (%6.0f ns/draw)", padded, ms, iterations, ms * 1e6 / Double(iterations)))
+    let nsPerDraw = ms * 1e6 / Double(iterations)
+    print(String(format: "%@ %8.1f ms / %d draws (%6.0f ns/draw)", padded, ms, iterations, nsPerDraw))
 }
 
 print("DataLens \(DataLens.version)")

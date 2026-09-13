@@ -11,9 +11,25 @@ let package = Package(
     products: [
         .library(name: "DataLens", targets: ["DataLens"]),
     ],
+    dependencies: [
+        // Pinned to the tagged 0.1.0 commit: `from: "0.1.0"` fails to
+        // resolve (see DECISIONS #9). Bump manually on new NumericCore tags.
+        .package(url: "https://github.com/hakkabon/Swift-NumericCore.git",
+                 revision: "c9892c7fc4a76dfefd3480dead9d3ddfaeb50567"),
+    ],
     targets: [
         .target(
             name: "DataLens",
+            dependencies: [
+                .product(name: "NumericCore", package: "Swift-NumericCore"),
+                // Apple-only (imports Accelerate); Linux builds use the
+                // vendored fallback via `#if canImport(Accelerate)`.
+                .product(
+                    name: "NumericCoreAccelerate",
+                    package: "Swift-NumericCore",
+                    condition: .when(platforms: [.macOS, .iOS, .macCatalyst, .tvOS, .watchOS, .visionOS])
+                ),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]

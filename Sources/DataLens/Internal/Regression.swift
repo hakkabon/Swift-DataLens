@@ -1,14 +1,62 @@
 import Foundation
+import NumericCore
+#if canImport(Accelerate)
+import NumericCoreAccelerate
+#endif
 
-/// Vendored subset of Numerical-Statistics' `Regression` (byte-identical
-/// numerics, demoted to internal): square-system solver only.
+/// Square-system solver: LAPACK (`AccelerateBackend.solve`, QR-based) on
+/// Apple platforms, vendored Gaussian elimination below elsewhere (Linux) —
+/// same signature, same nil-on-singularity contract.
 ///
 /// Least-squares fits go through ``LinAlg`` — never form XᵀX for fitting.
 /// This solver is for Newton-type square systems and, in this package, for
-/// the LOESS leverage/SE weights.
+/// the LOESS leverage/SE weights. The SPD fast path (`solveSPD`) is kept
+/// separate for local likelihood — the frozen LOESS calls stay on `solve`.
 enum Regression {
-    /// Solve a square linear system with partial-pivot Gaussian elimination.
+    /// Solve a square linear system (QR-based on Apple, partial-pivot
+    /// Gaussian elimination in the Linux fallback). Returns `nil` on
+    /// singularity (near-zero pivot / rank-deficient R diagonal).
     static func solve(_ A: [[Double]], _ b: [Double]) -> [Double]? {
+        #if canImport(Accelerate)
+        do {
+            let a = try Matrix<Double>(rows: A)
+            let rhs = Vector(b)
+            guard let v = try? AccelerateBackend.solve(a, rhs) else { return nil }
+            return v.storage
+        } catch {
+            return nil
+        }
+        #else
+        return eliminate(A, b)
+        #endif
+    }
+
+    /// SPD fast path for local-likelihood normal equations (XᵀWX, symmetric
+    /// by construction): Cholesky (dpotrf/dpotrs, ~2x fewer flops than QR)
+    /// on Apple, elimination in the Linux fallback (correct, not faster).
+    /// Returns `nil` iff A is not positive-definite (Apple) or hits a
+    /// singular pivot (fallback).
+    ///
+    /// - Warning: symmetry is *not* checked — LAPACK reads one triangle
+    ///   only. Call only with symmetric-by-construction matrices; otherwise
+    ///   use `solve(_:_:)`.
+    static func solveSPD(_ A: [[Double]], _ b: [Double]) -> [Double]? {
+        #if canImport(Accelerate)
+        do {
+            let a = try Matrix<Double>(rows: A)
+            let rhs = Vector(b)
+            guard let v = try? AccelerateBackend.solveSPD(a, rhs) else { return nil }
+            return v.storage
+        } catch {
+            return nil
+        }
+        #else
+        return eliminate(A, b)
+        #endif
+    }
+
+    /// Partial-pivot Gaussian elimination (Linux fallback for both solvers).
+    private static func eliminate(_ A: [[Double]], _ b: [Double]) -> [Double]? {
         let n = b.count
         guard A.count == n, A.allSatisfy({ $0.count == n }) else { return nil }
         var M = A, x = b

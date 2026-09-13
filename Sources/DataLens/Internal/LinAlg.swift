@@ -1,11 +1,17 @@
 import Foundation
+import NumericCore
+#if canImport(Accelerate)
+import NumericCoreAccelerate
+#endif
 
 /// Small dense linear algebra: Householder QR and least-squares solves.
 ///
-/// Vendored subset of Numerical-Statistics' `LinAlg` (byte-identical
-/// numerics, demoted to internal): the normal equations (XᵀX) square the
-/// condition number, so all least-squares fits go through
-/// `leastSquares(design:response:)`.
+/// `leastSquares(design:response:)` runs LAPACK (`AccelerateBackend`, thin
+/// QR via dgeqrf/dormqr/dtrtrs) on Apple platforms and falls back to the
+/// vendored Householder implementation below elsewhere (Linux) — same
+/// signature, same nil-on-rank-deficiency contract. `Matrix(rows:)`
+/// converts our row-major arrays to column-major at the boundary.
+/// `qr(_:)` has no Accelerate counterpart and stays vendored everywhere.
 ///
 /// - Note: `qr(_:)` is currently unused by `Loess` but kept (and covered in
 ///   the sibling repo) so the seam stays complete; do not delete it as dead
@@ -93,6 +99,16 @@ enum LinAlg {
     /// Least-squares solution min ‖y − Xβ‖ via thin Householder QR.
     /// Returns `nil` when X is rank deficient.
     static func leastSquares(design X: [[Double]], response y: [Double]) -> [Double]? {
+        #if canImport(Accelerate)
+        do {
+            let a = try Matrix<Double>(rows: X)
+            let b = Vector(y)
+            guard let v = try? AccelerateBackend.leastSquares(design: a, response: b) else { return nil }
+            return v.storage
+        } catch {
+            return nil
+        }
+        #else
         guard !X.isEmpty, X.count == y.count else { return nil }
         guard let (R, refs) = reduce(X) else { return nil }
         let m = X.count, n = X[0].count
@@ -112,5 +128,6 @@ enum LinAlg {
             beta[i] = s / R[i][i]
         }
         return beta
+        #endif
     }
 }
