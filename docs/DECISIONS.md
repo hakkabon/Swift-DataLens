@@ -100,6 +100,33 @@ on the LAPACK path, and debug benches improved (fit 2235→1773ms, predict
 1215→807ms). One compiler note: `guard let v = try?` flattens the
 double-optional, so the bodies use `v.storage`, not `v?.storage`.
 
+## 10. Adaptive smoothing via per-observation local AICc (0.2.0)
+
+`AdaptiveLoess` scores candidate neighborhood sizes at each fit point and
+keeps the minimizer — a clean-room adaptive design (no `locfit` code),
+not a port. Three judgment calls, all load-bearing. **(1) Per-observation,
+not totals.** Totals (`k·ln(RSS/k) + …`) let the neighborhood SIZE dominate
+instead of fit quality: the `k·ln(RSS/k)` term grows with k whenever
+RSS/k > 1, so at a gross outlier it selected k=4, the robustness rounds
+then zeroed the whole contaminated cluster, and the fit trapped far from
+truth (caught by the ported outlier test). Dividing by k keeps the
+bias–variance reading intact — large-k dilution then wins at outliers and
+recovery works. **(2) Select-once-then-reweight.** Selection runs once,
+unweighted (mirroring how `Loess` fixes its span across rounds); the
+bisquare rounds refine on fixed neighborhoods. Selection stays a pure
+function of the data. **(3) Shared engine, frozen behavior.** `Loess`
+gained no behavior: `localFit` and `standardError` delegate their QR +
+leverage / kernel-norm blocks to `LocalPolynomial.fitWeighted` and
+`Loess.kernelStandardError` (same ops, same order — the 20-test suite
+passes unaltered), and `AdaptiveLoess` reuses those plus `NeighborSearch`
+and the fallback cascade (including the robust-ignoring bounded mean for
+degenerate combined weights). Candidates default to a ~1.6× geometric grid
+(≤9 values, always ending at n so flat regions may go global); exact ties
+resolve toward larger k; `k ≥ q+2` required, else nil. Evidence on
+heterogeneous truth (flat left, growing oscillations right): mean selected
+k 15.4 flat vs 7.1 wiggly, RMSE 0.038 vs best fixed span 0.248; on
+homogeneous sine, 0.047 vs 0.061. `DataLens.version` → 0.2.0.
+
 ## 8. SPD seam bound, LOESS calls untouched
 
 `Regression.solveSPD` binds `AccelerateBackend.solveSPD` (dpotrf/dpotrs)

@@ -172,34 +172,17 @@ public struct Loess: Sendable {
         }
         var X: [[Double]] = [], y: [Double] = [], sw: [Double] = []
         for (j, ww) in w {
-            let s = sqrt(ww)
-            X.append(Loess.basis(trainX[j], center: x, degree: degree).map { $0 * s })
-            y.append(trainY[j] * s)
+            X.append(Loess.basis(trainX[j], center: x, degree: degree))
+            y.append(trainY[j])
             sw.append(ww)
         }
-        guard let beta = LinAlg.leastSquares(design: X, response: y) else {
+        let pos = trackIndex.flatMap { t in w.firstIndex(where: { $0.idx == t }) }
+        guard let r = LocalPolynomial.fitWeighted(rows: X, values: y, weights: sw, track: pos) else {
             let total = sw.reduce(0.0, +)
             let value = zip(w, sw).reduce(0.0) { $0 + trainY[$1.0.idx] * $1.1 } / total
             return (value, 0)
         }
-        // Leverage l_t(x) = e₁ᵀ(XᵀWX)⁻¹·(XᵀW e_t): solve normal equations once.
-        var leverage = 0.0
-        if let t = trackIndex, let pos = w.firstIndex(where: { $0.idx == t }) {
-            let q = beta.count
-            var XtX = [[Double]](repeating: [Double](repeating: 0, count: q), count: q)
-            var Xtw = [Double](repeating: 0, count: q)
-            for (r, (j, ww)) in w.enumerated() {
-                let row = Loess.basis(trainX[j], center: x, degree: degree)
-                for a in 0..<q {
-                    Xtw[a] += row[a] * (r == pos ? ww : 0)
-                    for b in 0..<q { XtX[a][b] += row[a] * ww * row[b] }
-                }
-            }
-            if let col = Regression.solve(XtX, Xtw) {
-                leverage = col[0]
-            }
-        }
-        return (beta[0], leverage)
+        return (r.coefficients[0], r.leverage)
     }
 
     /// Predict at `x` using the final robust weights (fallback cascade inside).
@@ -216,7 +199,14 @@ public struct Loess: Sendable {
     public func standardError(at x: [Double]) -> Double? {
         guard x.count == trainX[0].count else { return nil }
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
-        // Single-shot query: skip the tree build (see NeighborSearch).
+        return Loess.kernelStandardError(trainX: trainX, sigma: sigma, degree: degree,
+                                          at: x, neighborhood: k)
+    }
+
+    /// Equivalent-kernel standard error over an explicit neighborhood —
+    /// shared with `AdaptiveLoess` (which selects `k` per point).
+    static func kernelStandardError(trainX: [[Double]], sigma: Double, degree: Int,
+                                    at x: [Double], neighborhood k: Int) -> Double? {
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
         let nb = search.nearest(to: x, count: k)
         let h = Loess.bandwidth(trainX: trainX, indices: nb, at: x)

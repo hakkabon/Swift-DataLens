@@ -31,3 +31,10 @@ bench("loess predict x50", iterations: 20, warmup: 2) {
     for i in 0..<50 { s += loessFit.predict([Double(i) / 10]) }
     _ = s
 }
+// Adaptive fit (n=60, degree 2, default grid + 2 robust rounds).
+let adaptX = (0..<60).map { [Double($0) / 10] }
+let adaptY = adaptX.map { sin($0[0]) }
+bench("adaptive fit n=60", iterations: 2, warmup: 0) {
+    _ = AdaptiveLoess.fit(trainX: adaptX, trainY: adaptY, degree: 2,
+                          robustIterations: 2)
+}
