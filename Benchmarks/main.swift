@@ -38,3 +38,10 @@ bench("adaptive fit n=60", iterations: 2, warmup: 0) {
     _ = AdaptiveLoess.fit(trainX: adaptX, trainY: adaptY, degree: 2,
                           robustIterations: 2)
 }
+// Local-binomial fit (n=80, degree 1, span 0.5; deterministic labels).
+let llX = (0..<80).map { [Double($0) / 20 - 2] }
+let llY = llX.map { sin($0[0] * 2) > 0 ? 1.0 : 0.0 }
+bench("local-binomial fit n=80", iterations: 2, warmup: 0) {
+    _ = LocalLikelihood.fit(trainX: llX, trainY: llY, degree: 1,
+                            family: .binomial, span: 0.5)
+}

@@ -2,10 +2,10 @@
 
 Local regression in pure Swift — `import DataLens`.
 
-> Status: Cleveland-style LOESS (`Loess`, frozen) plus clean-room
-> Loader-style adaptive smoothing (`AdaptiveLoess`, per-point AICc
-> neighborhoods). Least squares via LAPACK on Apple with a vendored
-> fallback; neighbors via kd-tree or brute force. Next: local likelihood.
+> Status: Cleveland-style LOESS (`Loess`, frozen), clean-room adaptive
+> smoothing (`AdaptiveLoess`), and local likelihood (`LocalLikelihood`:
+> Gaussian/Binomial/Poisson via Newton–IRLS). Least squares via LAPACK on
+> Apple with a vendored fallback; neighbors via kd-tree or brute force.
 > No GPL `locfit` code enters this repo.
 
 ## Features
@@ -23,6 +23,11 @@ Local regression in pure Swift — `import DataLens`.
   heterogeneous truth), same bisquare robustness, SEs, trace and GCV-style
   diagnostics as `Loess` — no change to classic `Loess` without a
   `docs/DECISIONS.md` entry.
+- **Local likelihood (`LocalLikelihood`, clean-room Loader-style):**
+  Gaussian (identity), Binomial (logit), Poisson (log) families by
+  Newton–IRLS with step-halving (≤25 rounds, 1e-8 tolerance), SPD systems
+  through the Cholesky seam; boundary MLEs saturate finitely, deviances +
+  AIC span selection, delta-method SEs.
 
 ## Requirements
 
@@ -35,7 +40,7 @@ Local regression in pure Swift — `import DataLens`.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.2.0")
+    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.3.0")
 ],
 targets: [
     .target(name: "MyTarget", dependencies: ["DataLens"])
@@ -68,7 +73,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-26 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+34 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
@@ -76,8 +81,11 @@ clouds with duplicates, coincident queries, degenerate inputs, mixed
 tree/brute paths), `SolverSeamTests` (closed-form solves plus the
 rank-deficient/singular/non-PD → nil contract, on whichever solver path
 is active), `AdaptiveLoessTests` (exactness, outlier recovery, directly
-observed adaptivity that beats the best fixed span, homogeneous parity)
-plus a version smoke test (full suite ≈ 2s in debug).
+observed adaptivity that beats the best fixed span, homogeneous parity),
+`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
+1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
+clamping, AIC span selection) plus a version smoke test
+(full suite ≈ 3s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -99,6 +107,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │   └── DataLens
 │       ├── AdaptiveLoess.swift
 │       ├── DataLens.swift
+│       ├── LocalLikelihood.swift
 │       ├── Loess.swift
 │       ├── Internal
 │       │   ├── Descriptive.swift (median)
@@ -114,6 +123,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
     └── DataLensTests
         ├── AdaptiveLoessTests.swift
         ├── DataLensTests.swift
+        ├── LocalLikelihoodTests.swift
         ├── LoessTests.swift
         ├── NearestNeighborTests.swift
         └── SolverSeamTests.swift
@@ -124,9 +134,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: clean-room local likelihood (Loader-style families) as new types
-  on the `solveSPD` seam (classic `Loess`/`AdaptiveLoess` behavior is frozen
-  without a DECISIONS entry).
+- Next: adaptive-bandwidth local likelihood, robustness reweighting for
+  likelihood families, further families — as new types/APIs (all three
+  smoothers' behavior is frozen without a DECISIONS entry).
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,
   `swift run Benchmarks`, `swiftformat`, `swiftlint` before submitting).

@@ -20,4 +20,6 @@ fit.predict([7.5]) // 14.0
 - ``Loess``
 - ``LoessWeight``
 - ``AdaptiveLoess``
+- ``LocalLikelihood``
+- ``LocalLikelihoodFamily``
 - ``DataLens``

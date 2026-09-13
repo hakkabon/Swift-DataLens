@@ -1,9 +1,9 @@
-/// Local-regression toolkit: Cleveland-style LOESS, plus clean-room
-/// Loader-style adaptive smoothing; local likelihood next.
+/// Local-regression toolkit: Cleveland-style LOESS, clean-room adaptive
+/// smoothing, and local likelihood (Gaussian/Binomial/Poisson).
 ///
-/// `Loess` behavior is frozen (see `docs/DECISIONS.md`); new smoothers land
-/// as new types. No GPL `locfit` code enters here.
+/// Behaviors are frozen (see `docs/DECISIONS.md`); new smoothers land as new
+/// types. No GPL `locfit` code enters here.
 public enum DataLens {
     /// Library version marker.
-    public static let version = "0.2.0"
+    public static let version = "0.3.0"
 }

@@ -127,6 +127,28 @@ heterogeneous truth (flat left, growing oscillations right): mean selected
 k 15.4 flat vs 7.1 wiggly, RMSE 0.038 vs best fixed span 0.248; on
 homogeneous sine, 0.047 vs 0.061. `DataLens.version` → 0.2.0.
 
+## 11. Local likelihood via Newton–IRLS (0.3.0)
+
+`LocalLikelihood` (Gaussian/Binomial/Poisson) maximizes the
+locality-weighted log-likelihood per fit point with Newton–IRLS:
+step-halving on the weighted local deviance, 25-iteration cap, 1e-8
+relative tolerance, η clamped at ±30 for weight arithmetic. The normal
+equations go through `Regression.solveSPD` — the consumer that seam was
+added for. Three calls worth recording. **(1) No robustness rounds.**
+Likelihood families carry their own variance structure; bisquare
+reweighting rounds are future work, not this release. **(2) Boundary MLEs
+saturate, never diverge.** Separated neighborhoods (all-0/all-1) clamp
+finitely (measured 2e-10/1−2e-10 on step truth); rank-deficient systems
+fall back to a bounded locality mean mirroring `Loess`. Silent fallback
+(not loud failure) is deliberate and consistent with `Loess`: what returns
+is never an unconverged iterate. **(3) Gaussian consistency as gate.**
+Without robustness, Gaussian local likelihood IS the Loess WLS estimator —
+but `Loess` always applies one bisquare round (even `robustIterations: 0`
+updates the weights once), so cross-agreement is asserted loosely (0.05)
+while exactness is pinned directly: normal-equations residual ≤1e-9,
+binomial score ≤1e-6. Measured recovery: binomial RMSE 0.060, Poisson
+0.44, deviances ~2× below null in both. `DataLens.version` → 0.3.0.
+
 ## 8. SPD seam bound, LOESS calls untouched
 
 `Regression.solveSPD` binds `AccelerateBackend.solveSPD` (dpotrf/dpotrs)
