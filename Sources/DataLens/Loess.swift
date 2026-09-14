@@ -125,6 +125,57 @@ public struct Loess: Sendable {
                      fittedValues: fitted, sigma: sigma, trace: trace, weights: robust)
     }
 
+    /// Concurrent fit: identical to `fit(trainX:trainY:span:degree:robustIterations:)`.
+    ///
+    /// Robustness rounds stay sequential (each round needs the previous
+    /// residuals), but the per-point local fits within a round run in
+    /// parallel. Bit-identical to `fit` (pinned by `BatchTests`).
+    public static func fitConcurrently(trainX: [[Double]], trainY: [Double],
+                                       span: Double = 0.75, degree: Int = 2,
+                                       robustIterations: Int = 4) async -> Loess? {
+        guard !trainX.isEmpty, trainX.count == trainY.count,
+              span > 0, span <= 1, (0...2).contains(degree),
+              trainX.allSatisfy({ $0.count == trainX[0].count }),
+              trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
+              trainY.allSatisfy({ $0.isFinite }) else { return nil }
+        let n = trainX.count
+        let p = trainX[0].count
+        let q = 1 + (degree >= 1 ? p : 0) + (degree >= 2 ? p * (p + 1) / 2 : 0)
+        let k = min(n, max(Int(ceil(span * Double(n))), q + 1))
+        guard k > 1 else { return nil }
+        let search = NeighborSearch(trainX: trainX)
+        var robust = [Double](repeating: 1, count: n)
+        var fitted = [Double](repeating: 0, count: n)
+        let medY = Descriptive.median(trainY) ?? 0
+        let yScale = max(Descriptive.median(trainY.map { abs($0 - medY) }) ?? 0, 1e-300)
+        for _ in 0...robustIterations {
+            let currentRobust = robust
+            fitted = await concurrentMap(over: n) { i in
+                Loess.localFit(search: search, trainY: trainY, degree: degree,
+                               at: trainX[i], neighborhood: k, robust: currentRobust).value
+            }
+            let resid = zip(trainY, fitted).map { abs($0 - $1) }
+            guard let s = Descriptive.median(resid) else { break }
+            let sEff = max(s, 1e-8 * yScale)
+            robust = resid.map { LoessWeight.bisquare($0 / (6 * sEff)) }
+        }
+        var trace = 0.0
+        let currentRobust = robust
+        let final = await concurrentMap(over: n) { i -> (Double, Double) in
+            let r = Loess.localFit(search: search, trainY: trainY, degree: degree,
+                                   at: trainX[i], neighborhood: k, robust: currentRobust, trackIndex: i)
+            return (r.value, r.leverage)
+        }
+        for (i, (v, l)) in final.enumerated() {
+            fitted[i] = v
+            trace += l
+        }
+        let rss = zip(trainY, fitted).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
+        let sigma = sqrt(rss / max(Double(n) - trace, 1))
+        return Loess(trainX: trainX, trainY: trainY, span: span, degree: degree,
+                     fittedValues: fitted, sigma: sigma, trace: trace, weights: robust)
+    }
+
     /// Max neighbor distance (bandwidth); 0 when all neighbors coincide.
     static func bandwidth(trainX: [[Double]], indices: [Int], at x: [Double]) -> Double {
         indices.map { j in
@@ -195,19 +246,82 @@ public struct Loess: Sendable {
                               at: x, neighborhood: k, robust: weights).value
     }
 
+    /// Predictions over many queries (one shared neighbor index — much
+    /// cheaper than looping `predict(_:)`).
+    public func predict(_ xs: [[Double]]) -> [Double] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return .nan }
+            return Loess.localFit(search: search, trainY: trainY, degree: degree,
+                                  at: x, neighborhood: k, robust: weights).value
+        }
+    }
+
+    /// Concurrent batch predictions (identical to `predict(_:)`).
+    public func predictConcurrently(_ xs: [[Double]]) async -> [Double] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        return await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return .nan }
+            return Loess.localFit(search: search, trainY: trainY, degree: degree,
+                                  at: x, neighborhood: k, robust: weights).value
+        }
+    }
+
     /// Approximate standard error σ̂·‖l(x)‖ with the equivalent kernel l(x).
     public func standardError(at x: [Double]) -> Double? {
         guard x.count == trainX[0].count else { return nil }
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
-        return Loess.kernelStandardError(trainX: trainX, sigma: sigma, degree: degree,
+        // Single-shot query: skip the tree build (see NeighborSearch).
+        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
                                           at: x, neighborhood: k)
+    }
+
+    /// Standard errors over many queries (one shared neighbor index).
+    /// Entries are nil exactly where `standardError(at:)` is nil.
+    public func standardErrors(at xs: [[Double]]) -> [Double?] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let sigma = sigma
+        let degree = degree
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return nil }
+            return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
+                                              at: x, neighborhood: k)
+        }
+    }
+
+    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
+    public func standardErrorsConcurrently(at xs: [[Double]]) async -> [Double?] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let sigma = sigma
+        let degree = degree
+        let trainX = trainX
+        return await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return nil }
+            return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
+                                              at: x, neighborhood: k)
+        }
     }
 
     /// Equivalent-kernel standard error over an explicit neighborhood —
     /// shared with `AdaptiveLoess` (which selects `k` per point).
-    static func kernelStandardError(trainX: [[Double]], sigma: Double, degree: Int,
+    static func kernelStandardError(search: NeighborSearch, sigma: Double, degree: Int,
                                     at x: [Double], neighborhood k: Int) -> Double? {
-        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let trainX = search.trainingPoints
         let nb = search.nearest(to: x, count: k)
         let h = Loess.bandwidth(trainX: trainX, indices: nb, at: x)
         var rows: [[Double]] = [], ws: [Double] = []

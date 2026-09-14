@@ -45,3 +45,8 @@ bench("local-binomial fit n=80", iterations: 2, warmup: 0) {
     _ = LocalLikelihood.fit(trainX: llX, trainY: llY, degree: 1,
                             family: .binomial, span: 0.5)
 }
+// Batch prediction over a 200-point grid: shared index vs per-call loop.
+let gridX = (0..<200).map { [Double($0) / 40] }
+bench("loess batch predict x200", iterations: 5, warmup: 1) {
+    _ = loessFit.predict(gridX)
+}

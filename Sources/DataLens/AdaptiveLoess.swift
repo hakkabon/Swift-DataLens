@@ -269,6 +269,88 @@ public struct AdaptiveLoess: Sendable {
                              bandwidths: bandwidths, candidateNeighborhoods: candidates)
     }
 
+    /// Concurrent fit: identical to `fit(trainX:trainY:degree:neighborhoods:robustIterations:)`.
+    ///
+    /// Selection, refits, and the final pass run per-point in parallel;
+    /// residual medians and the trace stay sequential, in index order.
+    /// Bit-identical to `fit` (pinned by `BatchTests`).
+    public static func fitConcurrently(trainX: [[Double]], trainY: [Double], degree: Int = 2,
+                                       neighborhoods: [Int]? = nil,
+                                       robustIterations: Int = 4) async -> AdaptiveLoess? {
+        guard !trainX.isEmpty, trainX.count == trainY.count, (0...2).contains(degree),
+              trainX.allSatisfy({ $0.count == trainX[0].count }),
+              trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
+              trainY.allSatisfy({ $0.isFinite }) else { return nil }
+        let n = trainX.count
+        let p = trainX[0].count
+        let q = basisSize(degree: degree, dimensions: p)
+        let kMin = q + 2
+        let candidates = Array(Set(neighborhoods ?? defaultGrid(n: n, kMin: kMin))
+            .filter { $0 >= kMin && $0 <= n }).sorted()
+        guard !candidates.isEmpty else { return nil }
+        let search = NeighborSearch(trainX: trainX)
+        let ones = [Double](repeating: 1, count: n)
+        var selected = [Int](repeating: 0, count: n)
+        var fitted = [Double](repeating: 0, count: n)
+        var bandwidths = [Double](repeating: 0, count: n)
+        let round0 = await concurrentMap(over: n) { i -> (Int, Double, Double)? in
+            guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
+                                               parameters: q, at: trainX[i],
+                                               candidates: candidates) else { return nil }
+            guard let e = AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
+                                                 at: trainX[i], neighborhood: s.neighborhood,
+                                                 robust: ones, track: nil) else { return nil }
+            return (s.neighborhood, e.value, e.bandwidth)
+        }
+        for (i, r) in round0.enumerated() {
+            guard let (k, v, h) = r else { return nil }
+            selected[i] = k
+            fitted[i] = v
+            bandwidths[i] = h
+        }
+        let medY = Descriptive.median(trainY) ?? 0
+        let yScale = max(Descriptive.median(trainY.map { abs($0 - medY) }) ?? 0, 1e-300)
+        var robust = ones
+        for _ in 0..<robustIterations {
+            let resid = zip(trainY, fitted).map { abs($0 - $1) }
+            guard let s = Descriptive.median(resid) else { break }
+            let sEff = max(s, 1e-8 * yScale)
+            robust = resid.map { LoessWeight.bisquare($0 / (6 * sEff)) }
+            let currentRobust = robust
+            let currentSelected = selected
+            let vals: [Double?] = await concurrentMap(over: n) { i in
+                AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
+                                       at: trainX[i], neighborhood: currentSelected[i],
+                                       robust: currentRobust, track: nil)?.value
+            }
+            for (i, v) in vals.enumerated() {
+                guard let v else { return nil }
+                fitted[i] = v
+            }
+        }
+        var trace = 0.0
+        let currentRobust = robust
+        let currentSelected = selected
+        let final = await concurrentMap(over: n) { i -> (Double, Double, Double)? in
+            guard let e = AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
+                                                 at: trainX[i], neighborhood: currentSelected[i],
+                                                 robust: currentRobust, track: i) else { return nil }
+            return (e.value, e.leverage, e.bandwidth)
+        }
+        for (i, r) in final.enumerated() {
+            guard let (v, l, h) = r else { return nil }
+            fitted[i] = v
+            bandwidths[i] = h
+            trace += l
+        }
+        let rss = zip(trainY, fitted).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
+        let sigma = sqrt(rss / max(Double(n) - trace, 1))
+        return AdaptiveLoess(trainX: trainX, trainY: trainY, degree: degree,
+                             fittedValues: fitted, sigma: sigma, trace: trace,
+                             weights: robust, selectedNeighborhoods: selected,
+                             bandwidths: bandwidths, candidateNeighborhoods: candidates)
+    }
+
     /// Predict at `x`: select (same unweighted recipe as training), then fit
     /// with the final robust weights.
     public func predict(_ x: [Double]) -> Double {
@@ -292,7 +374,89 @@ public struct AdaptiveLoess: Sendable {
         guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
                                            parameters: q, at: x,
                                            candidates: candidateNeighborhoods) else { return nil }
-        return Loess.kernelStandardError(trainX: trainX, sigma: sigma, degree: degree,
+        return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
                                           at: x, neighborhood: s.neighborhood)
+    }
+
+    /// Predictions over many queries (one shared neighbor index — much
+    /// cheaper than looping `predict(_:)`).
+    public func predict(_ xs: [[Double]]) -> [Double] {
+        let search = NeighborSearch(trainX: trainX)
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        let candidates = candidateNeighborhoods
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return .nan }
+            let q = AdaptiveLoess.basisSize(degree: degree, dimensions: x.count)
+            guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
+                                               parameters: q, at: x,
+                                               candidates: candidates) else { return .nan }
+            guard let e = AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
+                                                 at: x, neighborhood: s.neighborhood,
+                                                 robust: weights, track: nil) else { return .nan }
+            return e.value
+        }
+    }
+
+    /// Concurrent batch predictions (identical to `predict(_:)`).
+    public func predictConcurrently(_ xs: [[Double]]) async -> [Double] {
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        let candidates = candidateNeighborhoods
+        return await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return .nan }
+            let q = AdaptiveLoess.basisSize(degree: degree, dimensions: x.count)
+            guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
+                                               parameters: q, at: x,
+                                               candidates: candidates) else { return .nan }
+            guard let e = AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
+                                                 at: x, neighborhood: s.neighborhood,
+                                                 robust: weights, track: nil) else { return .nan }
+            return e.value
+        }
+    }
+
+    /// Standard errors over many queries (one shared neighbor index).
+    public func standardErrors(at xs: [[Double]]) -> [Double?] {
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let sigma = sigma
+        let candidates = candidateNeighborhoods
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return nil }
+            let q = AdaptiveLoess.basisSize(degree: degree, dimensions: x.count)
+            guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
+                                               parameters: q, at: x,
+                                               candidates: candidates) else { return nil }
+            return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
+                                              at: x, neighborhood: s.neighborhood)
+        }
+    }
+
+    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
+    public func standardErrorsConcurrently(at xs: [[Double]]) async -> [Double?] {
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let sigma = sigma
+        let candidates = candidateNeighborhoods
+        return await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return nil }
+            let q = AdaptiveLoess.basisSize(degree: degree, dimensions: x.count)
+            guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
+                                               parameters: q, at: x,
+                                               candidates: candidates) else { return nil }
+            return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
+                                              at: x, neighborhood: s.neighborhood)
+        }
     }
 }

@@ -28,6 +28,10 @@ Local regression in pure Swift — `import DataLens`.
   Newton–IRLS with step-halving (≤25 rounds, 1e-8 tolerance), SPD systems
   through the Cholesky seam; boundary MLEs saturate finitely, deviances +
   AIC span selection, delta-method SEs.
+- **Batch evaluation + concurrency:** `predict(_:)` / `standardErrors(at:)`
+  over query grids share one neighbor index (no per-call rebuilds);
+  `*Concurrently` async variants and concurrent fits via indexed task
+  groups — bit-identical to the sequential paths.
 
 ## Requirements
 
@@ -40,7 +44,7 @@ Local regression in pure Swift — `import DataLens`.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.3.0")
+    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.4.0")
 ],
 targets: [
     .target(name: "MyTarget", dependencies: ["DataLens"])
@@ -73,7 +77,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-34 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+40 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
@@ -84,8 +88,9 @@ is active), `AdaptiveLoessTests` (exactness, outlier recovery, directly
 observed adaptivity that beats the best fixed span, homogeneous parity),
 `LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
-clamping, AIC span selection) plus a version smoke test
-(full suite ≈ 3s in debug).
+clamping, AIC span selection), `BatchTests` (batches equal pointwise
+calls, concurrent variants bit-identical incl. fits) plus a version smoke
+test (full suite ≈ 3s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -110,6 +115,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       ├── LocalLikelihood.swift
 │       ├── Loess.swift
 │       ├── Internal
+│       │   ├── Concurrency.swift (indexed task-group batch helper)
 │       │   ├── Descriptive.swift (median)
 │       │   ├── KDTree.swift (N-D kd-tree, exact brute-force parity)
 │       │   ├── LinAlg.swift (Householder QR + least squares)
@@ -122,6 +128,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 └── Tests
     └── DataLensTests
         ├── AdaptiveLoessTests.swift
+        ├── BatchTests.swift
         ├── DataLensTests.swift
         ├── LocalLikelihoodTests.swift
         ├── LoessTests.swift
@@ -134,9 +141,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: adaptive-bandwidth local likelihood, robustness reweighting for
-  likelihood families, further families — as new types/APIs (all three
-  smoothers' behavior is frozen without a DECISIONS entry).
+- Next: automatic smoother choice (family + span in one call), derivative
+  estimates, parallel span selection — smoothers' behavior stays frozen
+  without a DECISIONS entry.
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,
   `swift run Benchmarks`, `swiftformat`, `swiftlint` before submitting).
