@@ -50,3 +50,7 @@ let gridX = (0..<200).map { [Double($0) / 40] }
 bench("loess batch predict x200", iterations: 5, warmup: 1) {
     _ = loessFit.predict(gridX)
 }
+// One-call automated tuning (n=60 continuous: adaptive + 3 fixed spans).
+bench("auto tune n=60", iterations: 1, warmup: 0) {
+    _ = AutomaticSmoother.fit(trainX: adaptX, trainY: adaptY, degree: 2)
+}

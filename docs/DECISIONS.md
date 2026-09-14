@@ -197,3 +197,24 @@ residuals) with parallel inner loops — the compiler itself enforces the
 per-round snapshots by rejecting captured `var`s, which documents the
 semantics. `selectSpan` stays sync (spans are whole fits; parallelizing
 that loop is future work). `DataLens.version` → 0.4.0.
+
+## 13. Automated tuning in one call (0.5.0)
+
+`AutomaticSmoother` routes by response type — all-0/1 → binomial, integral
+non-negative → Poisson, else continuous — then tunes by a shared
+criterion: AIC for the likelihood legs, GCV for continuous, where
+`AdaptiveLoess` and fixed-span `Loess` compete head-to-head (GCV is
+computable from fitted values + trace for both, so the comparison is
+apples-to-apples). Three notes. **(1) Integral means counts, exactly.**
+`y == y.rounded()` with no tolerance: true counts are exact in Double,
+and tolerance would misroute near-integers; binary is checked first since
+0/1 are also integral. **(2) Fallbacks are reported, not hidden.** Tiny
+inputs with no valid adaptive neighborhood, or a failed likelihood path,
+degrade to the next option with a note in `TuningSummary` — verified by a
+test that asserts on the note's content, since silent rerouting would be
+worse than failing. **(3) The tuner returns fits, not just predictions.**
+`FittedSmoother` carries the full underlying fit (predict/batch/SE all
+forward), so nothing downstream is lost by going through automation.
+Measured: heterogeneous truth routes adaptive and beats every fixed span;
+binary/counts recoveries hold at the likelihood tests' margins.
+`DataLens.version` → 0.5.0.

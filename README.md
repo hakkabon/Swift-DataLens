@@ -3,10 +3,10 @@
 Local regression in pure Swift — `import DataLens`.
 
 > Status: Cleveland-style LOESS (`Loess`, frozen), clean-room adaptive
-> smoothing (`AdaptiveLoess`), and local likelihood (`LocalLikelihood`:
-> Gaussian/Binomial/Poisson via Newton–IRLS). Least squares via LAPACK on
-> Apple with a vendored fallback; neighbors via kd-tree or brute force.
-> No GPL `locfit` code enters this repo.
+> smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`), batch
+> evaluation, and one-call automated tuning (`AutomaticSmoother`). Least
+> squares via LAPACK on Apple with a vendored fallback; neighbors via
+> kd-tree or brute force. No GPL `locfit` code enters this repo.
 
 ## Features
 
@@ -32,6 +32,10 @@ Local regression in pure Swift — `import DataLens`.
   over query grids share one neighbor index (no per-call rebuilds);
   `*Concurrently` async variants and concurrent fits via indexed task
   groups — bit-identical to the sequential paths.
+- **Automated tuning (`AutomaticSmoother`):** routes by response type
+  (binary → binomial, counts → Poisson, else continuous), tunes spans by
+  AIC/GCV with adaptive-vs-fixed competition, and reports what it chose
+  and why in a printable `TuningSummary` — fallbacks noted, never silent.
 
 ## Requirements
 
@@ -44,7 +48,7 @@ Local regression in pure Swift — `import DataLens`.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.4.0")
+    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.5.0")
 ],
 targets: [
     .target(name: "MyTarget", dependencies: ["DataLens"])
@@ -77,7 +81,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-40 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+46 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
@@ -89,8 +93,10 @@ observed adaptivity that beats the best fixed span, homogeneous parity),
 `LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
 clamping, AIC span selection), `BatchTests` (batches equal pointwise
-calls, concurrent variants bit-identical incl. fits) plus a version smoke
-test (full suite ≈ 3s in debug).
+calls, concurrent variants bit-identical incl. fits),
+`AutomaticSmootherTests` (response-type routing, adaptive win on GCV,
+fallback with a recorded note, invalid input) plus a version smoke test
+(full suite ≈ 4s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -111,6 +117,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 ├── Sources
 │   └── DataLens
 │       ├── AdaptiveLoess.swift
+│       ├── AutomaticSmoother.swift
 │       ├── DataLens.swift
 │       ├── LocalLikelihood.swift
 │       ├── Loess.swift
@@ -128,6 +135,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 └── Tests
     └── DataLensTests
         ├── AdaptiveLoessTests.swift
+        ├── AutomaticSmootherTests.swift
         ├── BatchTests.swift
         ├── DataLensTests.swift
         ├── LocalLikelihoodTests.swift
@@ -141,9 +149,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: automatic smoother choice (family + span in one call), derivative
-  estimates, parallel span selection — smoothers' behavior stays frozen
-  without a DECISIONS entry.
+- Next: derivative estimates, adaptive-bandwidth likelihood, parallel
+  span selection — smoothers' behavior stays frozen without a DECISIONS
+  entry.
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,
   `swift run Benchmarks`, `swiftformat`, `swiftlint` before submitting).
