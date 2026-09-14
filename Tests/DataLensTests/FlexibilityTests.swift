@@ -198,7 +198,7 @@ struct MissingDataTests {
         var rng = SeedableRandomNumberGenerator(seed: 8104)
         let xs = (0..<40).map { _ in [Double.random(in: -2...2, using: &rng)] }
         let ys = zip(xs, xs).map { Double.random(in: 0..<1, using: &rng) < 1 / (1 + exp(-$0.0[0])) ? 1.0 : 0.0 }
-        var dirtyY = ys + [.nan]
+        let dirtyY = ys + [.nan]
         let dirtyX = xs + [[0.0]]
         let dropped = LocalLikelihood.fit(trainX: dirtyX, trainY: dirtyY, degree: 1,
                                            family: .binomial, span: 0.5,

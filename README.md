@@ -85,14 +85,14 @@ swift test
 swift test --filter DataLensTests
 ```
 
-62 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+63 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
 clouds with duplicates, coincident queries, degenerate inputs, mixed
 tree/brute paths), `SolverSeamTests` (closed-form solves plus the
-rank-deficient/singular/non-PD → nil contract, on whichever solver path
-is active), `AdaptiveLoessTests` (exactness, outlier recovery, directly
+rank-deficient/singular/non-PD → nil contract on both solver paths, with
+the Linux fallback Cholesky pinned directly), `AdaptiveLoessTests` (exactness, outlier recovery, directly
 observed adaptivity that beats the best fixed span, homogeneous parity),
 `LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation

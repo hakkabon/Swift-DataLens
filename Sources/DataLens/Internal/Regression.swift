@@ -33,12 +33,12 @@ enum Regression {
 
     /// SPD fast path for local-likelihood normal equations (XᵀWX, symmetric
     /// by construction): Cholesky (dpotrf/dpotrs, ~2x fewer flops than QR)
-    /// on Apple, elimination in the Linux fallback (correct, not faster).
-    /// Returns `nil` iff A is not positive-definite (Apple) or hits a
-    /// singular pivot (fallback).
+    /// on Apple, scalar Cholesky below elsewhere (correct, same verdicts).
+    /// Returns `nil` iff A is not positive-definite.
     ///
     /// - Warning: symmetry is *not* checked — LAPACK reads one triangle
-    ///   only. Call only with symmetric-by-construction matrices; otherwise
+    ///   only (and the fallback mirrors that with the upper triangle).
+    ///   Call only with symmetric-by-construction matrices; otherwise
     ///   use `solve(_:_:)`.
     static func solveSPD(_ A: [[Double]], _ b: [Double]) -> [Double]? {
         #if canImport(NumericCoreAccelerate)
@@ -51,11 +51,48 @@ enum Regression {
             return nil
         }
         #else
-        return eliminate(A, b)
+        return cholesky(A, b)
         #endif
     }
 
-    /// Partial-pivot Gaussian elimination (Linux fallback for both solvers).
+    /// Scalar Cholesky solve (Linux fallback for `solveSPD`): factor
+    /// A = UᵀU from the upper triangle — mirroring LAPACK's `uplo = "U"` —
+    /// then forward/back substitution. Returns `nil` on empty/mismatched
+    /// input or a non-positive pivot, the same verdict `dpotrf` renders
+    /// (definite/not-definite only, not conditioning quality).
+    static func cholesky(_ A: [[Double]], _ b: [Double]) -> [Double]? {
+        let n = b.count
+        guard A.count == n, A.allSatisfy({ $0.count == n }) else { return nil }
+        var U = [[Double]](repeating: [Double](repeating: 0, count: n), count: n)
+        for i in 0..<n {
+            for j in i..<n {
+                var s = A[i][j]
+                for k in 0..<i { s -= U[k][i] * U[k][j] }
+                if i == j {
+                    guard s > 0 else { return nil }
+                    U[i][i] = sqrt(s)
+                } else {
+                    U[i][j] = s / U[i][i]
+                }
+            }
+        }
+        // Solve Uᵀy = b (forward), then Ux = y (backward).
+        var y = b
+        for i in 0..<n {
+            var s = y[i]
+            for k in 0..<i { s -= U[k][i] * y[k] }
+            y[i] = s / U[i][i]
+        }
+        var x = y
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            var s = x[i]
+            for k in i + 1..<n { s -= U[i][k] * x[k] }
+            x[i] = s / U[i][i]
+        }
+        return x
+    }
+
+    /// Partial-pivot Gaussian elimination (Linux fallback for `solve`).
     private static func eliminate(_ A: [[Double]], _ b: [Double]) -> [Double]? {
         let n = b.count
         guard A.count == n, A.allSatisfy({ $0.count == n }) else { return nil }

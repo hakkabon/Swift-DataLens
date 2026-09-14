@@ -253,3 +253,19 @@ Householder/elimination bodies, which is exactly what those bodies were
 kept for. macOS still binds LAPACK (both modules present in the build,
 62 green, bench signature unchanged). No version bump: behavior is
 identical on every platform that built before.
+
+## 16. Fallback Cholesky restores solveSPD parity on Linux
+
+CI proved the `solveSPD` fallback wrong, not just slow: Gaussian
+elimination solves nonsingular indefinite systems (returning `[1, 1]`
+for `[[1, 2], [2, 1]]`), while LAPACK's `dpotrf` returns nil — same
+contract name, different verdicts, one red Linux test. The fallback is
+now scalar Cholesky from the upper triangle (mirroring `uplo = "U"`),
+nil on a non-positive pivot exactly like `info > 0`; `eliminate` stays
+for general `solve`, which must keep solving indefinite systems.
+Verified three ways: direct `cholesky` unit tests (pinned on every
+platform), the full 63-test suite under a temporarily forced fallback
+(`#if false`, reverted — the exact code Linux executes), and the
+restored Accelerate path afterward. Lesson: fallback paths need
+verdict-parity tests, not just value tests — the next fallback addition
+should ship its indefinite/singular cases with it.

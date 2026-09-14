@@ -57,4 +57,18 @@ struct SolverSeamTests {
         #expect(Regression.solveSPD([[4, 2, 1], [2, 3, 0]], [8, 7]) == nil)
         #expect(Regression.solveSPD([[4, 2], [2, 3]], [8]) == nil)
     }
+
+    @Test func fallbackCholeskyMatchesSPD() {
+        // The Linux fallback, pinned directly (runs on every platform):
+        // same solution as the active path, same nil verdicts.
+        let x = Regression.cholesky([[4, 2], [2, 3]], [8, 7])!
+        #expect(abs(x[0] - 1.25) <= 1e-12)
+        #expect(abs(x[1] - 1.5) <= 1e-12)
+        let s = Regression.solveSPD([[4, 2], [2, 3]], [8, 7])!
+        #expect(abs(x[0] - s[0]) <= 1e-9)
+        #expect(abs(x[1] - s[1]) <= 1e-9)
+        #expect(Regression.cholesky([[1, 2], [2, 1]], [3, 3]) == nil)
+        #expect(Regression.cholesky([[0, 0], [0, 0]], [0, 0]) == nil)
+        #expect(Regression.cholesky([[4, 2, 1], [2, 3, 0]], [8, 7]) == nil)
+    }
 }
