@@ -15,54 +15,60 @@ struct BatchTests {
         return (xs, ys)
     }
 
-    @Test func loessBatchEqualsPointwise() async {
+    @Test func loessBatchEqualsPointwise() async throws {
         let (xs, ys) = sineData(n: 30, seed: 601)
         let fit = Loess.fit(trainX: xs, trainY: ys, span: 0.5, degree: 2)!
         let grid = (0..<20).map { [Double($0) / 4] }
         let batch = fit.predict(grid)
         #expect(batch == grid.map { fit.predict($0) })
-        #expect(await fit.predictConcurrently(grid) == batch)
+        let batchConc = try await fit.predictConcurrently(grid)
+        #expect(batchConc == batch)
         let seBatch = fit.standardErrors(at: grid)
         #expect(seBatch.count == grid.count)
         for (i, x) in grid.enumerated() {
             #expect(seBatch[i] == fit.standardError(at: x))
         }
-        #expect(await fit.standardErrorsConcurrently(at: grid) == seBatch)
+        let seConc = try await fit.standardErrorsConcurrently(at: grid)
+        #expect(seConc == seBatch)
         #expect(fit.predict([]) == [])
-        #expect(await fit.predictConcurrently([]) == [])
+        let emptyConc = try await fit.predictConcurrently([])
+        #expect(emptyConc == [])
         #expect(fit.predict([[0, 0]]).first!.isNaN)
         #expect(fit.standardErrors(at: [[0, 0]]) == [nil])
     }
 
-    @Test func loessConcurrentFitEqualsSync() async {
+    @Test func loessConcurrentFitEqualsSync() async throws {
         let (xs, ys) = sineData(n: 30, seed: 602)
         let sync = Loess.fit(trainX: xs, trainY: ys, span: 0.5, degree: 2)!
-        let conc = await Loess.fitConcurrently(trainX: xs, trainY: ys, span: 0.5, degree: 2)!
+        let conc = try await Loess.fitConcurrently(trainX: xs, trainY: ys, span: 0.5, degree: 2)!
         #expect(conc.fittedValues == sync.fittedValues)
         #expect(conc.weights == sync.weights)
         #expect(conc.trace == sync.trace)
         #expect(conc.sigma == sync.sigma)
-        #expect(await Loess.fitConcurrently(trainX: [], trainY: []) == nil)
+        let nilFit = try await Loess.fitConcurrently(trainX: [], trainY: [])
+        #expect(nilFit == nil)
     }
 
-    @Test func adaptiveBatchEqualsPointwise() async {
+    @Test func adaptiveBatchEqualsPointwise() async throws {
         let (xs, ys) = sineData(n: 25, seed: 603)
         let fit = AdaptiveLoess.fit(trainX: xs, trainY: ys, degree: 1)!
         let grid = (0..<15).map { [Double($0) / 5] }
         let batch = fit.predict(grid)
         #expect(batch == grid.map { fit.predict($0) })
-        #expect(await fit.predictConcurrently(grid) == batch)
+        let batchConc = try await fit.predictConcurrently(grid)
+        #expect(batchConc == batch)
         let seBatch = fit.standardErrors(at: grid)
         for (i, x) in grid.enumerated() {
             #expect(seBatch[i] == fit.standardError(at: x))
         }
-        #expect(await fit.standardErrorsConcurrently(at: grid) == seBatch)
+        let seConc = try await fit.standardErrorsConcurrently(at: grid)
+        #expect(seConc == seBatch)
     }
 
-    @Test func adaptiveConcurrentFitEqualsSync() async {
+    @Test func adaptiveConcurrentFitEqualsSync() async throws {
         let (xs, ys) = sineData(n: 25, seed: 604)
         let sync = AdaptiveLoess.fit(trainX: xs, trainY: ys, degree: 1)!
-        let conc = await AdaptiveLoess.fitConcurrently(trainX: xs, trainY: ys, degree: 1)!
+        let conc = try await AdaptiveLoess.fitConcurrently(trainX: xs, trainY: ys, degree: 1)!
         #expect(conc.fittedValues == sync.fittedValues)
         #expect(conc.selectedNeighborhoods == sync.selectedNeighborhoods)
         #expect(conc.bandwidths == sync.bandwidths)
@@ -71,7 +77,7 @@ struct BatchTests {
         #expect(conc.sigma == sync.sigma)
     }
 
-    @Test func likelihoodBatchEqualsPointwise() async {
+    @Test func likelihoodBatchEqualsPointwise() async throws {
         var rng = SeedableRandomNumberGenerator(seed: 605)
         let xs = (0..<40).map { _ in [Double.random(in: -2...2, using: &rng)] }
         let ys = zip(xs, xs).map { Double.random(in: 0..<1, using: &rng) < 1 / (1 + exp(-$0.0[0])) ? 1.0 : 0.0 }
@@ -80,27 +86,52 @@ struct BatchTests {
         let grid = (0..<15).map { [Double($0) / 4 - 2] }
         let batch = fit.predict(grid)
         #expect(batch == grid.map { fit.predict($0) })
-        #expect(await fit.predictConcurrently(grid) == batch)
+        let batchConc = try await fit.predictConcurrently(grid)
+        #expect(batchConc == batch)
         let seBatch = fit.standardErrors(at: grid)
         for (i, x) in grid.enumerated() {
             #expect(seBatch[i] == fit.standardError(at: x))
         }
-        #expect(await fit.standardErrorsConcurrently(at: grid) == seBatch)
+        let seConc = try await fit.standardErrorsConcurrently(at: grid)
+        #expect(seConc == seBatch)
         #expect(fit.predict([]) == [])
     }
 
-    @Test func likelihoodConcurrentFitEqualsSync() async {
+    @Test func likelihoodConcurrentFitEqualsSync() async throws {
         var rng = SeedableRandomNumberGenerator(seed: 606)
         let xs = (0..<40).map { _ in [Double.random(in: -2...2, using: &rng)] }
         let ys = zip(xs, xs).map { Double.random(in: 0..<1, using: &rng) < 1 / (1 + exp(-$0.0[0])) ? 1.0 : 0.0 }
         let sync = LocalLikelihood.fit(trainX: xs, trainY: ys, degree: 1,
                                         family: .binomial, span: 0.5)!
-        let conc = await LocalLikelihood.fitConcurrently(trainX: xs, trainY: ys, degree: 1,
+        let conc = try await LocalLikelihood.fitConcurrently(trainX: xs, trainY: ys, degree: 1,
                                                           family: .binomial, span: 0.5)!
         #expect(conc.fittedValues == sync.fittedValues)
         #expect(conc.linearPredictors == sync.linearPredictors)
         #expect(conc.trace == sync.trace)
         #expect(conc.deviance == sync.deviance)
         #expect(conc.sigma == sync.sigma)
+    }
+
+    @Test func cancellationAbortsPendingWork() async {
+        // Far more tasks than executor threads: cancelling immediately
+        // after creation guarantees pending tasks observe it (started
+        // ones finish first; the group still throws). No timing involved.
+        let task = Task {
+            try await concurrentMap(over: 1000) { $0 }
+        }
+        task.cancel()
+        do {
+            _ = try await task.value
+            Issue.record("expected CancellationError")
+        } catch is CancellationError {
+            // Expected: pending points aborted.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+    }
+
+    @Test func uncancelledBatchCompletes() async throws {
+        let out = try await concurrentMap(over: 10) { $0 * 2 }
+        #expect(out == (0..<10).map { $0 * 2 })
     }
 }

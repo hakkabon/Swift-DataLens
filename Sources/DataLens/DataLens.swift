@@ -6,5 +6,5 @@
 /// types. No GPL `locfit` code enters here.
 public enum DataLens {
     /// Library version marker.
-    public static let version = "0.6.0"
+    public static let version = "0.6.2"
 }

@@ -148,7 +148,7 @@ public struct Loess: Sendable {
     public static func fitConcurrently(trainX: [[Double]], trainY: [Double],
                                        span: Double = 0.75, degree: Int = 2,
                                        robustIterations: Int = 4,
-                                       droppingMissing: Bool = false) async -> Loess? {
+                                       droppingMissing: Bool = false) async throws -> Loess? {
         guard trainX.count == trainY.count else { return nil }
         let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
             ? MissingData.dropping(trainX: trainX, trainY: trainY)
@@ -170,7 +170,7 @@ public struct Loess: Sendable {
         let yScale = max(Descriptive.median(trainY.map { abs($0 - medY) }) ?? 0, 1e-300)
         for _ in 0...robustIterations {
             let currentRobust = robust
-            fitted = await concurrentMap(over: n) { i in
+            fitted = try await concurrentMap(over: n) { i in
                 Loess.localFit(search: search, trainY: trainY, degree: degree,
                                at: trainX[i], neighborhood: k, robust: currentRobust).value
             }
@@ -181,7 +181,7 @@ public struct Loess: Sendable {
         }
         var trace = 0.0
         let currentRobust = robust
-        let final = await concurrentMap(over: n) { i -> (Double, Double) in
+        let final = try await concurrentMap(over: n) { i -> (Double, Double) in
             let r = Loess.localFit(search: search, trainY: trainY, degree: degree,
                                    at: trainX[i], neighborhood: k, robust: currentRobust, trackIndex: i)
             return (r.value, r.leverage)
@@ -320,7 +320,7 @@ public struct Loess: Sendable {
 
     /// Concurrent batch predictions (identical to `predict(_:)`).
     public func predictConcurrently(_ xs: [[Double]],
-                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double] {
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         let search = NeighborSearch(trainX: trainX)
         let box = BoundingBox(trainX)
@@ -330,7 +330,7 @@ public struct Loess: Sendable {
         let weights = weights
         let fittedValues = fittedValues
         let policy = extrapolation
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return .nan }
             if !box.contains(x) {
@@ -377,14 +377,14 @@ public struct Loess: Sendable {
     }
 
     /// Concurrent batch gradients (identical to `gradients(at:)`).
-    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
+    public func gradientsConcurrently(at xs: [[Double]]) async throws -> [[Double]?] {
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         let search = NeighborSearch(trainX: trainX)
         let trainX = trainX
         let trainY = trainY
         let degree = degree
         let weights = weights
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count, !x.isEmpty else { return nil }
             return Loess.gradientAt(search: search, trainY: trainY, degree: degree,
@@ -472,14 +472,14 @@ public struct Loess: Sendable {
 
     /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
     public func standardErrorsConcurrently(at xs: [[Double]],
-                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double?] {
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         let search = NeighborSearch(trainX: trainX)
         let sigma = sigma
         let degree = degree
         let trainX = trainX
         let policy = extrapolation
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return nil }
             guard let q = Loess.policyQuery(x, trainX: trainX, search: search,

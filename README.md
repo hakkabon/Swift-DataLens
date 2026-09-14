@@ -32,7 +32,8 @@ Local regression in pure Swift — `import DataLens`.
 - **Batch evaluation + concurrency:** `predict(_:)` / `standardErrors(at:)`
   over query grids share one neighbor index (no per-call rebuilds);
   `*Concurrently` async variants and concurrent fits via indexed task
-  groups — bit-identical to the sequential paths.
+  groups — bit-identical to the sequential paths, cooperatively
+  cancellable.
 - **Automated tuning (`AutomaticSmoother`):** routes by response type
   (binary → binomial, counts → Poisson, else continuous), tunes spans by
   AIC/GCV with adaptive-vs-fixed competition, and reports what it chose
@@ -85,7 +86,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-63 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+65 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
@@ -97,7 +98,8 @@ observed adaptivity that beats the best fixed span, homogeneous parity),
 `LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
 clamping, AIC span selection), `BatchTests` (batches equal pointwise
-calls, concurrent variants bit-identical incl. fits),
+calls, concurrent variants bit-identical incl. fits, cooperative
+cancellation with abort/completion tests),
 `AutomaticSmootherTests` (response-type routing, adaptive win on GCV,
 fallback with a recorded note, invalid input), `FlexibilityTests`
 (derivative exactness + cosine tracking, extrapolation policies on values

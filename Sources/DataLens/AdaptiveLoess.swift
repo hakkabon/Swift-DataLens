@@ -290,7 +290,7 @@ public struct AdaptiveLoess: Sendable {
     public static func fitConcurrently(trainX: [[Double]], trainY: [Double], degree: Int = 2,
                                        neighborhoods: [Int]? = nil,
                                        robustIterations: Int = 4,
-                                       droppingMissing: Bool = false) async -> AdaptiveLoess? {
+                                       droppingMissing: Bool = false) async throws -> AdaptiveLoess? {
         guard trainX.count == trainY.count else { return nil }
         let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
             ? MissingData.dropping(trainX: trainX, trainY: trainY)
@@ -311,7 +311,7 @@ public struct AdaptiveLoess: Sendable {
         var selected = [Int](repeating: 0, count: n)
         var fitted = [Double](repeating: 0, count: n)
         var bandwidths = [Double](repeating: 0, count: n)
-        let round0 = await concurrentMap(over: n) { i -> (Int, Double, Double)? in
+        let round0 = try await concurrentMap(over: n) { i -> (Int, Double, Double)? in
             guard let s = AdaptiveLoess.select(search: search, trainY: trainY, degree: degree,
                                                parameters: q, at: trainX[i],
                                                candidates: candidates) else { return nil }
@@ -336,7 +336,7 @@ public struct AdaptiveLoess: Sendable {
             robust = resid.map { LoessWeight.bisquare($0 / (6 * sEff)) }
             let currentRobust = robust
             let currentSelected = selected
-            let vals: [Double?] = await concurrentMap(over: n) { i in
+            let vals: [Double?] = try await concurrentMap(over: n) { i in
                 AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
                                        at: trainX[i], neighborhood: currentSelected[i],
                                        robust: currentRobust, track: nil)?.value
@@ -349,7 +349,7 @@ public struct AdaptiveLoess: Sendable {
         var trace = 0.0
         let currentRobust = robust
         let currentSelected = selected
-        let final = await concurrentMap(over: n) { i -> (Double, Double, Double)? in
+        let final = try await concurrentMap(over: n) { i -> (Double, Double, Double)? in
             guard let e = AdaptiveLoess.evaluate(search: search, trainY: trainY, degree: degree,
                                                  at: trainX[i], neighborhood: currentSelected[i],
                                                  robust: currentRobust, track: i) else { return nil }
@@ -427,7 +427,7 @@ public struct AdaptiveLoess: Sendable {
 
     /// Concurrent batch predictions (identical to `predict(_:)`).
     public func predictConcurrently(_ xs: [[Double]],
-                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double] {
         let search = NeighborSearch(trainX: trainX)
         let trainX = trainX
         let trainY = trainY
@@ -436,7 +436,7 @@ public struct AdaptiveLoess: Sendable {
         let fittedValues = fittedValues
         let candidates = candidateNeighborhoods
         let policy = extrapolation
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return .nan }
             return AdaptiveLoess.predictAt(search: search, trainX: trainX, trainY: trainY,
@@ -487,14 +487,14 @@ public struct AdaptiveLoess: Sendable {
     }
 
     /// Concurrent batch gradients (identical to `gradients(at:)`).
-    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
+    public func gradientsConcurrently(at xs: [[Double]]) async throws -> [[Double]?] {
         let search = NeighborSearch(trainX: trainX)
         let trainX = trainX
         let trainY = trainY
         let degree = degree
         let weights = weights
         let candidates = candidateNeighborhoods
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count, !x.isEmpty else { return nil }
             return AdaptiveLoess.gradientAt(search: search, trainY: trainY, degree: degree,
@@ -562,7 +562,7 @@ public struct AdaptiveLoess: Sendable {
 
     /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
     public func standardErrorsConcurrently(at xs: [[Double]],
-                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double?] {
         let search = NeighborSearch(trainX: trainX)
         let trainX = trainX
         let trainY = trainY
@@ -570,7 +570,7 @@ public struct AdaptiveLoess: Sendable {
         let sigma = sigma
         let candidates = candidateNeighborhoods
         let policy = extrapolation
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return nil }
             return AdaptiveLoess.standardErrorAt(search: search, trainX: trainX, trainY: trainY,

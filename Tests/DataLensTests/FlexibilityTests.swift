@@ -61,14 +61,15 @@ struct DerivativeTests {
         #expect(abs(g[0] - 3.0) <= 1e-6)
     }
 
-    @Test func gradientBatchesAgree() async {
+    @Test func gradientBatchesAgree() async throws {
         let xs = (0..<30).map { [Double($0) / 5] }
         let ys = xs.map { sin($0[0]) }
         let fit = Loess.fit(trainX: xs, trainY: ys, span: 0.5, degree: 2)!
         let grid = (0..<10).map { [Double($0) / 2] }
         let batch = fit.gradients(at: grid)
         #expect(batch == grid.map { fit.gradient(at: $0) })
-        #expect(await fit.gradientsConcurrently(at: grid) == batch)
+        let gradConc = try await fit.gradientsConcurrently(at: grid)
+        #expect(gradConc == batch)
     }
 }
 
@@ -126,12 +127,12 @@ struct ExtrapolationTests {
         #expect(fit.predict(outside, extrapolation: .unavailable).isNaN)
     }
 
-    @Test func batchPolicies() async {
+    @Test func batchPolicies() async throws {
         let fit = sineFit()
         let grid = [[1.0], [100.0]]
         #expect(fit.predict(grid, extrapolation: .unavailable).map { $0.isNaN } == [false, true])
-        #expect(await fit.predictConcurrently(grid, extrapolation: .nearest)
-            == fit.predict(grid, extrapolation: .nearest))
+        let policyConc = try await fit.predictConcurrently(grid, extrapolation: .nearest)
+        #expect(policyConc == fit.predict(grid, extrapolation: .nearest))
         #expect(fit.standardErrors(at: grid, extrapolation: .unavailable).map { $0 == nil }
             == [false, true])
     }

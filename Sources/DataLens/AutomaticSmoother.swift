@@ -36,11 +36,11 @@ public enum FittedSmoother: Sendable {
 
     /// Concurrent batch predictions (identical to `predict(_:)`).
     public func predictConcurrently(_ xs: [[Double]],
-                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double] {
         switch self {
-        case .loess(let fit): await fit.predictConcurrently(xs, extrapolation: extrapolation)
-        case .adaptive(let fit): await fit.predictConcurrently(xs, extrapolation: extrapolation)
-        case .likelihood(let fit): await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        case .loess(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        case .adaptive(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        case .likelihood(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
         }
     }
 
@@ -63,11 +63,11 @@ public enum FittedSmoother: Sendable {
     }
 
     /// Concurrent batch gradients (identical to `gradients(at:)`).
-    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
+    public func gradientsConcurrently(at xs: [[Double]]) async throws -> [[Double]?] {
         switch self {
-        case .loess(let fit): await fit.gradientsConcurrently(at: xs)
-        case .adaptive(let fit): await fit.gradientsConcurrently(at: xs)
-        case .likelihood(let fit): await fit.gradientsConcurrently(at: xs)
+        case .loess(let fit): try await fit.gradientsConcurrently(at: xs)
+        case .adaptive(let fit): try await fit.gradientsConcurrently(at: xs)
+        case .likelihood(let fit): try await fit.gradientsConcurrently(at: xs)
         }
     }
 
@@ -102,11 +102,11 @@ public enum FittedSmoother: Sendable {
 
     /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
     public func standardErrorsConcurrently(at xs: [[Double]],
-                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double?] {
         switch self {
-        case .loess(let fit): await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
-        case .adaptive(let fit): await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
-        case .likelihood(let fit): await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
+        case .loess(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
+        case .adaptive(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
+        case .likelihood(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
         }
     }
 }

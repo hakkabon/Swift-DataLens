@@ -269,3 +269,16 @@ platform), the full 63-test suite under a temporarily forced fallback
 restored Accelerate path afterward. Lesson: fallback paths need
 verdict-parity tests, not just value tests — the next fallback addition
 should ship its indefinite/singular cases with it.
+
+## 17. Cooperative cancellation on the concurrent surface (0.6.2)
+
+All 15 concurrent entry points (`*Concurrently`, `fitConcurrently`)
+are now `async throws`: each task checks cancellation before starting
+its point, so cancelling aborts pending points with `CancellationError`
+while in-flight points finish (CPU work cannot be preempted). The
+`throws` is source-breaking in principle but affects only the month-old
+async API with no downstream callers yet. Tests pin both sides:
+cancellation-aborts (1000 trivial tasks, immediate cancel — deterministic
+by oversubscription, no timing involved) and uncancelled-completes. Note
+for the app track: scroll-driven grids should cancel superseded fits
+rather than letting them pile up behind a pinching finger.

@@ -375,7 +375,7 @@ public struct LocalLikelihood: Sendable {
     public static func fitConcurrently(trainX: [[Double]], trainY: [Double],
                                        degree: Int = 2, family: LocalLikelihoodFamily = .gaussian,
                                        span: Double = 0.75,
-                                       droppingMissing: Bool = false) async -> LocalLikelihood? {
+                                       droppingMissing: Bool = false) async throws -> LocalLikelihood? {
         guard trainX.count == trainY.count else { return nil }
         let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
             ? MissingData.dropping(trainX: trainX, trainY: trainY)
@@ -403,7 +403,7 @@ public struct LocalLikelihood: Sendable {
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
         typealias PointOut = (mu: Double, eta: Double, xtx: [[Double]]?,
                               ownWeight: Double, bandwidth: Double)
-        let points: [PointOut?] = await concurrentMap(over: n) { i in
+        let points: [PointOut?] = try await concurrentMap(over: n) { i in
             guard let r = localFit(search: search, trainY: trainY, degree: degree,
                                    family: family, at: trainX[i],
                                    neighborhood: k, startBeta: startBeta) else { return nil }
@@ -510,7 +510,7 @@ public struct LocalLikelihood: Sendable {
 
     /// Concurrent batch predictions (identical to `predict(_:)`).
     public func predictConcurrently(_ xs: [[Double]],
-                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double] {
         let p = trainX[0].count
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
@@ -523,7 +523,7 @@ public struct LocalLikelihood: Sendable {
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
         let policy = extrapolation
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == p else { return .nan }
             return LocalLikelihood.predictAt(search: search, trainX: trainX, trainY: trainY,
@@ -633,7 +633,7 @@ public struct LocalLikelihood: Sendable {
     }
 
     /// Concurrent batch gradients (identical to `gradients(at:)`).
-    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
+    public func gradientsConcurrently(at xs: [[Double]]) async throws -> [[Double]?] {
         let p = trainX[0].count
         guard p > 0 else { return xs.map { _ in nil } }
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
@@ -644,7 +644,7 @@ public struct LocalLikelihood: Sendable {
         let family = family
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == p else { return nil }
             return LocalLikelihood.gradientAt(search: search, trainY: trainY, degree: degree,
@@ -678,7 +678,7 @@ public struct LocalLikelihood: Sendable {
 
     /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
     public func standardErrorsConcurrently(at xs: [[Double]],
-                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double?] {
         let p = trainX[0].count
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
@@ -690,7 +690,7 @@ public struct LocalLikelihood: Sendable {
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
         let policy = extrapolation
-        return await concurrentMap(over: xs.count) { i in
+        return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == p else { return nil }
             return LocalLikelihood.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
