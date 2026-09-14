@@ -41,11 +41,15 @@ public struct LocalLikelihood: Sendable {
     public let deviance: Double
     /// Global deviance at the intercept-only (global mean) fit.
     public let nullDeviance: Double
+    /// Original input row indices kept after missing-data dropping
+    /// (identity when nothing was dropped).
+    public let keptIndices: [Int]
 
     private init(trainX: [[Double]], trainY: [Double], degree: Int, family: LocalLikelihoodFamily,
                  span: Double,
                  fittedValues: [Double], linearPredictors: [Double], sigma: Double,
-                 trace: Double, deviance: Double, nullDeviance: Double) {
+                 trace: Double, deviance: Double, nullDeviance: Double,
+                 keptIndices: [Int]) {
         self.trainX = trainX
         self.trainY = trainY
         self.degree = degree
@@ -57,6 +61,7 @@ public struct LocalLikelihood: Sendable {
         self.trace = trace
         self.deviance = deviance
         self.nullDeviance = nullDeviance
+        self.keptIndices = keptIndices
     }
 
     /// Monomial basis size for `degree` in `p` dimensions.
@@ -295,8 +300,13 @@ public struct LocalLikelihood: Sendable {
     /// Binomial responses must be 0/1; Poisson responses must be ≥ 0.
     public static func fit(trainX: [[Double]], trainY: [Double],
                            degree: Int = 2, family: LocalLikelihoodFamily = .gaussian,
-                           span: Double = 0.75) -> LocalLikelihood? {
-        guard !trainX.isEmpty, trainX.count == trainY.count,
+                           span: Double = 0.75,
+                           droppingMissing: Bool = false) -> LocalLikelihood? {
+        guard trainX.count == trainY.count else { return nil }
+        let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
+            ? MissingData.dropping(trainX: trainX, trainY: trainY)
+            : (trainX, trainY, Array(trainX.indices))
+        guard !trainX.isEmpty,
               span > 0, span <= 1, (0...2).contains(degree),
               trainX.allSatisfy({ $0.count == trainX[0].count }),
               trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
@@ -354,18 +364,23 @@ public struct LocalLikelihood: Sendable {
         return LocalLikelihood(trainX: trainX, trainY: trainY, degree: degree, family: family,
                                span: span,
                                fittedValues: fitted, linearPredictors: etas, sigma: sigma,
-                               trace: trace, deviance: deviance, nullDeviance: nullDeviance)
+                               trace: trace, deviance: deviance, nullDeviance: nullDeviance,
+                               keptIndices: keptIndices)
     }
 
     /// Concurrent fit: identical to `fit(trainX:trainY:degree:family:span:)`.
     ///
-    /// Per-point IRLS runs in parallel; reductions (trace, RSS, deviances)
-    /// stay sequential, in index order. Bit-identical to `fit`
-    /// (pinned by `BatchTests`).
+    /// Per-point IRLS runs in parallel; reductions stay sequential, in index
+    /// order. Bit-identical to `fit` (pinned by `BatchTests`).
     public static func fitConcurrently(trainX: [[Double]], trainY: [Double],
                                        degree: Int = 2, family: LocalLikelihoodFamily = .gaussian,
-                                       span: Double = 0.75) async -> LocalLikelihood? {
-        guard !trainX.isEmpty, trainX.count == trainY.count,
+                                       span: Double = 0.75,
+                                       droppingMissing: Bool = false) async -> LocalLikelihood? {
+        guard trainX.count == trainY.count else { return nil }
+        let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
+            ? MissingData.dropping(trainX: trainX, trainY: trainY)
+            : (trainX, trainY, Array(trainX.indices))
+        guard !trainX.isEmpty,
               span > 0, span <= 1, (0...2).contains(degree),
               trainX.allSatisfy({ $0.count == trainX[0].count }),
               trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
@@ -429,27 +444,41 @@ public struct LocalLikelihood: Sendable {
         return LocalLikelihood(trainX: trainX, trainY: trainY, degree: degree, family: family,
                                span: span,
                                fittedValues: fitted, linearPredictors: etas, sigma: sigma,
-                               trace: trace, deviance: deviance, nullDeviance: nullDeviance)
+                               trace: trace, deviance: deviance, nullDeviance: nullDeviance,
+                               keptIndices: keptIndices)
     }
 
     /// Predict the mean at `x` (`.nan` on width mismatch).
-    public func predict(_ x: [Double]) -> Double {
+    public func predict(_ x: [Double], extrapolation: ExtrapolationPolicy = .polynomial) -> Double {
         guard x.count == trainX[0].count else { return .nan }
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: x.count)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
-        return LocalLikelihood.predictAt(search: search, trainY: trainY, degree: degree,
-                                         family: family, at: x,
-                                         neighborhood: k, startBeta: startBeta)
+        return LocalLikelihood.predictAt(search: search, trainX: trainX, trainY: trainY, degree: degree,
+                                         family: family, fittedValues: fittedValues,
+                                         at: x, neighborhood: k, startBeta: startBeta,
+                                         policy: extrapolation)
     }
 
     /// Shared per-point prediction kernel (single, batch, and concurrent
     /// evaluation all funnel through here).
-    static func predictAt(search: NeighborSearch, trainY: [Double], degree: Int,
-                          family: LocalLikelihoodFamily, at x: [Double],
-                          neighborhood k: Int, startBeta: [Double]) -> Double {
+    static func predictAt(search: NeighborSearch, trainX: [[Double]], trainY: [Double], degree: Int,
+                          family: LocalLikelihoodFamily, fittedValues: [Double],
+                          at x: [Double], neighborhood k: Int, startBeta: [Double],
+                          policy: ExtrapolationPolicy) -> Double {
+        if !BoundingBox(trainX).contains(x) {
+            switch policy {
+            case .polynomial:
+                break
+            case .nearest:
+                guard let j = search.nearest(to: x, count: 1).first else { return .nan }
+                return fittedValues[j]
+            case .unavailable:
+                return .nan
+            }
+        }
         guard let r = localFit(search: search, trainY: trainY, degree: degree,
                                family: family, at: x,
                                neighborhood: k, startBeta: startBeta) else { return .nan }
@@ -457,64 +486,91 @@ public struct LocalLikelihood: Sendable {
     }
 
     /// Predictions over many queries (one shared neighbor index).
-    public func predict(_ xs: [[Double]]) -> [Double] {
+    public func predict(_ xs: [[Double]], extrapolation: ExtrapolationPolicy = .polynomial) -> [Double] {
         let p = trainX[0].count
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
         let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
         let trainY = trainY
         let degree = degree
         let family = family
+        let fittedValues = fittedValues
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
+        let policy = extrapolation
         return xs.map { x in
             guard x.count == p else { return .nan }
-            return LocalLikelihood.predictAt(search: search, trainY: trainY, degree: degree,
-                                             family: family, at: x,
-                                             neighborhood: k, startBeta: startBeta)
+            return LocalLikelihood.predictAt(search: search, trainX: trainX, trainY: trainY,
+                                             degree: degree, family: family, fittedValues: fittedValues,
+                                             at: x, neighborhood: k, startBeta: startBeta,
+                                             policy: policy)
         }
     }
 
     /// Concurrent batch predictions (identical to `predict(_:)`).
-    public func predictConcurrently(_ xs: [[Double]]) async -> [Double] {
+    public func predictConcurrently(_ xs: [[Double]],
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
         let p = trainX[0].count
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
         let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
         let trainY = trainY
         let degree = degree
         let family = family
+        let fittedValues = fittedValues
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
+        let policy = extrapolation
         return await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == p else { return .nan }
-            return LocalLikelihood.predictAt(search: search, trainY: trainY, degree: degree,
-                                             family: family, at: x,
-                                             neighborhood: k, startBeta: startBeta)
+            return LocalLikelihood.predictAt(search: search, trainX: trainX, trainY: trainY,
+                                             degree: degree, family: family, fittedValues: fittedValues,
+                                             at: x, neighborhood: k, startBeta: startBeta,
+                                             policy: policy)
         }
     }
 
     /// Delta-method standard error se(μ̂) = |dμ/dη|·√(e₁ᵀM⁻¹e₁) at the
     /// solution (nil on width mismatch or degenerate neighborhoods).
-    public func standardError(at x: [Double]) -> Double? {
+    public func standardError(at x: [Double],
+                              extrapolation: ExtrapolationPolicy = .polynomial) -> Double? {
         guard x.count == trainX[0].count else { return nil }
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: x.count)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
         let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
-        return LocalLikelihood.standardErrorAt(search: search, trainY: trainY, degree: degree,
-                                               family: family, at: x,
-                                               neighborhood: k, startBeta: startBeta)
+        return LocalLikelihood.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
+                                               degree: degree, family: family,
+                                               at: x, neighborhood: k, startBeta: startBeta,
+                                               policy: extrapolation)
     }
 
     /// Shared per-point SE kernel.
-    static func standardErrorAt(search: NeighborSearch, trainY: [Double], degree: Int,
-                                family: LocalLikelihoodFamily, at x: [Double],
-                                neighborhood k: Int, startBeta: [Double]) -> Double? {
+    static func standardErrorAt(search: NeighborSearch, trainX: [[Double]], trainY: [Double], degree: Int,
+                                family: LocalLikelihoodFamily,
+                                at x: [Double], neighborhood k: Int, startBeta: [Double],
+                                policy: ExtrapolationPolicy) -> Double? {
+        let query: [Double]
+        switch policy {
+        case .polynomial:
+            query = x
+        case .nearest:
+            guard BoundingBox(trainX).contains(x) else {
+                guard let j = search.nearest(to: x, count: 1).first else { return nil }
+                query = trainX[j]
+                break
+            }
+            query = x
+        case .unavailable:
+            guard BoundingBox(trainX).contains(x) else { return nil }
+            query = x
+        }
         guard let r = localFit(search: search, trainY: trainY, degree: degree,
-                               family: family, at: x,
+                               family: family, at: query,
                                neighborhood: k, startBeta: startBeta),
             let m = r.normalEquations, !m.isEmpty
         else { return nil }
@@ -525,9 +581,41 @@ public struct LocalLikelihood: Sendable {
         return abs(wp.dmu) * sqrt(max(col[0], 0))
     }
 
-    /// Standard errors over many queries (one shared neighbor index).
-    public func standardErrors(at xs: [[Double]]) -> [Double?] {
+    /// Gradient of the fitted mean ∇μ̂(x) = dμ/dη · β[1...p] from the local
+    /// coefficients. Nil for degree-0 fits and degenerate neighborhoods;
+    /// local-polynomial by construction (ignores the extrapolation policy).
+    static func gradientAt(search: NeighborSearch, trainY: [Double], degree: Int,
+                           family: LocalLikelihoodFamily, at x: [Double],
+                           neighborhood k: Int, startBeta: [Double]) -> [Double]? {
+        guard degree >= 1, !x.isEmpty else { return nil }
+        guard let r = localFit(search: search, trainY: trainY, degree: degree,
+                               family: family, at: x,
+                               neighborhood: k, startBeta: startBeta),
+            let beta = r.coefficients, beta.count >= 1 + x.count
+        else { return nil }
+        let wp = workingPoint(eta: r.eta, family: family)
+        return beta[1...x.count].map { wp.dmu * $0 }
+    }
+
+    /// Gradient of the fitted mean ∇μ̂(x) = dμ/dη · β[1...p] from the local
+    /// coefficients. Nil for degree-0 fits and degenerate neighborhoods;
+    /// local-polynomial by construction (ignores the extrapolation policy).
+    public func gradient(at x: [Double]) -> [Double]? {
+        guard x.count == trainX[0].count, !x.isEmpty else { return nil }
+        let q = LocalLikelihood.basisSize(degree: degree, dimensions: x.count)
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
+        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
+        let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
+        return LocalLikelihood.gradientAt(search: search, trainY: trainY, degree: degree,
+                                          family: family, at: x,
+                                          neighborhood: k, startBeta: startBeta)
+    }
+
+    /// Gradients over many queries (one shared neighbor index).
+    public func gradients(at xs: [[Double]]) -> [[Double]?] {
         let p = trainX[0].count
+        guard p > 0 else { return xs.map { _ in nil } }
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
         let search = NeighborSearch(trainX: trainX)
@@ -538,15 +626,16 @@ public struct LocalLikelihood: Sendable {
         let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
         return xs.map { x in
             guard x.count == p else { return nil }
-            return LocalLikelihood.standardErrorAt(search: search, trainY: trainY, degree: degree,
-                                                   family: family, at: x,
-                                                   neighborhood: k, startBeta: startBeta)
+            return LocalLikelihood.gradientAt(search: search, trainY: trainY, degree: degree,
+                                              family: family, at: x,
+                                              neighborhood: k, startBeta: startBeta)
         }
     }
 
-    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
-    public func standardErrorsConcurrently(at xs: [[Double]]) async -> [Double?] {
+    /// Concurrent batch gradients (identical to `gradients(at:)`).
+    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
         let p = trainX[0].count
+        guard p > 0 else { return xs.map { _ in nil } }
         let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
         let search = NeighborSearch(trainX: trainX)
@@ -558,22 +647,71 @@ public struct LocalLikelihood: Sendable {
         return await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == p else { return nil }
-            return LocalLikelihood.standardErrorAt(search: search, trainY: trainY, degree: degree,
-                                                   family: family, at: x,
-                                                   neighborhood: k, startBeta: startBeta)
+            return LocalLikelihood.gradientAt(search: search, trainY: trainY, degree: degree,
+                                              family: family, at: x,
+                                              neighborhood: k, startBeta: startBeta)
+        }
+    }
+
+    /// Standard errors over many queries (one shared neighbor index).
+    public func standardErrors(at xs: [[Double]],
+                               extrapolation: ExtrapolationPolicy = .polynomial) -> [Double?] {
+        let p = trainX[0].count
+        let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let family = family
+        let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
+        let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
+        let policy = extrapolation
+        return xs.map { x in
+            guard x.count == p else { return nil }
+            return LocalLikelihood.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
+                                                   degree: degree, family: family,
+                                                   at: x, neighborhood: k, startBeta: startBeta,
+                                                   policy: policy)
+        }
+    }
+
+    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
+    public func standardErrorsConcurrently(at xs: [[Double]],
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+        let p = trainX[0].count
+        let q = LocalLikelihood.basisSize(degree: degree, dimensions: p)
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), q + 1))
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let family = family
+        let eta0 = LocalLikelihood.startEta(trainY: trainY, family: family)
+        let startBeta = [eta0] + [Double](repeating: 0, count: max(q - 1, 0))
+        let policy = extrapolation
+        return await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == p else { return nil }
+            return LocalLikelihood.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
+                                                   degree: degree, family: family,
+                                                   at: x, neighborhood: k, startBeta: startBeta,
+                                                   policy: policy)
         }
     }
 
     /// AIC span selection (deviance + 2·trace) over candidate spans.
     public static func selectSpan(trainX: [[Double]], trainY: [Double],
                                   spans: [Double], degree: Int = 2,
-                                  family: LocalLikelihoodFamily = .gaussian) -> (span: Double, fit: LocalLikelihood)? {
+                                  family: LocalLikelihoodFamily = .gaussian,
+                                  droppingMissing: Bool = false) -> (span: Double, fit: LocalLikelihood)? {
         var best: (span: Double, fit: LocalLikelihood)?
         var bestScore = Double.infinity
         for span in spans {
             guard let fit = LocalLikelihood.fit(trainX: trainX, trainY: trainY,
                                                 degree: degree, family: family,
-                                                span: span) else { continue }
+                                                span: span,
+                                                droppingMissing: droppingMissing) else { continue }
             guard fit.deviance.isFinite else { continue }
             let score = fit.deviance + 2 * fit.trace
             if score < bestScore { bestScore = score; best = (span, fit) }

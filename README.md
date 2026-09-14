@@ -4,9 +4,10 @@ Local regression in pure Swift — `import DataLens`.
 
 > Status: Cleveland-style LOESS (`Loess`, frozen), clean-room adaptive
 > smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`), batch
-> evaluation, and one-call automated tuning (`AutomaticSmoother`). Least
-> squares via LAPACK on Apple with a vendored fallback; neighbors via
-> kd-tree or brute force. No GPL `locfit` code enters this repo.
+> evaluation, one-call tuning, plus derivatives, explicit extrapolation,
+> and missing-data handling. Least squares via LAPACK on Apple with a
+> vendored fallback; neighbors via kd-tree or brute force. No GPL `locfit`
+> code enters this repo.
 
 ## Features
 
@@ -36,6 +37,9 @@ Local regression in pure Swift — `import DataLens`.
   (binary → binomial, counts → Poisson, else continuous), tunes spans by
   AIC/GCV with adaptive-vs-fixed competition, and reports what it chose
   and why in a printable `TuningSummary` — fallbacks noted, never silent.
+- **Predictive flexibility:** gradients (slopes/trends) on all smoothers,
+  explicit extrapolation policies (polynomial/nearest/unavailable) on every
+  predict/SE path, and missing-data dropping with survivor indices.
 
 ## Requirements
 
@@ -48,7 +52,7 @@ Local regression in pure Swift — `import DataLens`.
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.5.0")
+    .package(url: "https://github.com/hakkabon/Swift-DataLens.git", from: "0.6.0")
 ],
 targets: [
     .target(name: "MyTarget", dependencies: ["DataLens"])
@@ -81,7 +85,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-46 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+62 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
@@ -95,8 +99,10 @@ observed adaptivity that beats the best fixed span, homogeneous parity),
 clamping, AIC span selection), `BatchTests` (batches equal pointwise
 calls, concurrent variants bit-identical incl. fits),
 `AutomaticSmootherTests` (response-type routing, adaptive win on GCV,
-fallback with a recorded note, invalid input) plus a version smoke test
-(full suite ≈ 4s in debug).
+fallback with a recorded note, invalid input), `FlexibilityTests`
+(derivative exactness + cosine tracking, extrapolation policies on values
+and SEs, missing-data masks with bit-identical clean fits) plus a version
+smoke test (full suite ≈ 4s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -119,6 +125,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       ├── AdaptiveLoess.swift
 │       ├── AutomaticSmoother.swift
 │       ├── DataLens.swift
+│       ├── ExtrapolationPolicy.swift
 │       ├── LocalLikelihood.swift
 │       ├── Loess.swift
 │       ├── Internal
@@ -127,6 +134,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       │   ├── KDTree.swift (N-D kd-tree, exact brute-force parity)
 │       │   ├── LinAlg.swift (Householder QR + least squares)
 │       │   ├── LocalPolynomial.swift (shared WLS + leverage engine)
+│       │   ├── MissingData.swift (non-finite row dropping + masks)
 │       │   ├── NeighborSearch.swift (build-once routing: tree vs brute)
 │       │   ├── Regression.swift (square solver)
 │       │   └── SeededRNG.swift (test-only RNG + GaussianCache)
@@ -138,6 +146,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
         ├── AutomaticSmootherTests.swift
         ├── BatchTests.swift
         ├── DataLensTests.swift
+        ├── FlexibilityTests.swift
         ├── LocalLikelihoodTests.swift
         ├── LoessTests.swift
         ├── NearestNeighborTests.swift
@@ -149,9 +158,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: derivative estimates, adaptive-bandwidth likelihood, parallel
-  span selection — smoothers' behavior stays frozen without a DECISIONS
-  entry.
+- Next: adaptive-bandwidth likelihood, robustness reweighting for
+  likelihood families, further families — smoothers' behavior stays frozen
+  without a DECISIONS entry.
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,
   `swift run Benchmarks`, `swiftformat`, `swiftlint` before submitting).

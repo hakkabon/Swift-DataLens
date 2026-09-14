@@ -48,3 +48,35 @@ struct NeighborSearch: Sendable {
         return Loess.nearestIndices(trainX, to: x, count: k)
     }
 }
+
+/// Per-dimension bounding box over training rows: the hull that
+/// `ExtrapolationPolicy` tests membership against (a box, not the convex
+/// hull — documented on the policy).
+struct BoundingBox: Sendable {
+    private let mins: [Double]
+    private let maxs: [Double]
+
+    init(_ trainX: [[Double]]) {
+        let p = trainX.first?.count ?? 0
+        var mins = [Double](repeating: .infinity, count: p)
+        var maxs = [Double](repeating: -.infinity, count: p)
+        for row in trainX {
+            for (j, v) in row.enumerated() {
+                if v < mins[j] { mins[j] = v }
+                if v > maxs[j] { maxs[j] = v }
+            }
+        }
+        self.mins = mins
+        self.maxs = maxs
+    }
+
+    /// Whether `x` lies inside (edges count as inside). Width mismatch
+    /// returns false (callers check widths separately for NaN/nil).
+    func contains(_ x: [Double]) -> Bool {
+        guard x.count == mins.count else { return false }
+        for (j, v) in x.enumerated() {
+            if v < mins[j] || v > maxs[j] { return false }
+        }
+        return true
+    }
+}

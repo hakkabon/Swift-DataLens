@@ -42,9 +42,13 @@ public struct Loess: Sendable {
     public let trace: Double
     /// Final combined weights (locality × robustness) per training point.
     public let weights: [Double]
+    /// Original input row indices kept after missing-data dropping
+    /// (identity when nothing was dropped).
+    public let keptIndices: [Int]
 
     private init(trainX: [[Double]], trainY: [Double], span: Double, degree: Int,
-                 fittedValues: [Double], sigma: Double, trace: Double, weights: [Double]) {
+                 fittedValues: [Double], sigma: Double, trace: Double, weights: [Double],
+                 keptIndices: [Int]) {
         self.trainX = trainX
         self.trainY = trainY
         self.span = span
@@ -53,6 +57,7 @@ public struct Loess: Sendable {
         self.sigma = sigma
         self.trace = trace
         self.weights = weights
+        self.keptIndices = keptIndices
     }
 
     /// Monomial basis at `x` centered on `c`: [1, (x−c), squares, cross terms].
@@ -79,10 +84,19 @@ public struct Loess: Sendable {
     }
 
     /// Fit by `robustIterations` bisquare reweighting rounds (4 matches R).
+    ///
+    /// With `droppingMissing`, rows with non-finite coordinates or responses
+    /// are dropped first (`keptIndices` records the survivors); otherwise
+    /// such rows fail validation and the fit is nil.
     public static func fit(trainX: [[Double]], trainY: [Double],
                            span: Double = 0.75, degree: Int = 2,
-                           robustIterations: Int = 4) -> Loess? {
-        guard !trainX.isEmpty, trainX.count == trainY.count,
+                           robustIterations: Int = 4,
+                           droppingMissing: Bool = false) -> Loess? {
+        guard trainX.count == trainY.count else { return nil }
+        let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
+            ? MissingData.dropping(trainX: trainX, trainY: trainY)
+            : (trainX, trainY, Array(trainX.indices))
+        guard !trainX.isEmpty,
               span > 0, span <= 1, (0...2).contains(degree),
               trainX.allSatisfy({ $0.count == trainX[0].count }),
               trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
@@ -122,7 +136,8 @@ public struct Loess: Sendable {
         let rss = zip(trainY, fitted).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
         let sigma = sqrt(rss / max(Double(n) - trace, 1))
         return Loess(trainX: trainX, trainY: trainY, span: span, degree: degree,
-                     fittedValues: fitted, sigma: sigma, trace: trace, weights: robust)
+                     fittedValues: fitted, sigma: sigma, trace: trace, weights: robust,
+                     keptIndices: keptIndices)
     }
 
     /// Concurrent fit: identical to `fit(trainX:trainY:span:degree:robustIterations:)`.
@@ -132,8 +147,13 @@ public struct Loess: Sendable {
     /// parallel. Bit-identical to `fit` (pinned by `BatchTests`).
     public static func fitConcurrently(trainX: [[Double]], trainY: [Double],
                                        span: Double = 0.75, degree: Int = 2,
-                                       robustIterations: Int = 4) async -> Loess? {
-        guard !trainX.isEmpty, trainX.count == trainY.count,
+                                       robustIterations: Int = 4,
+                                       droppingMissing: Bool = false) async -> Loess? {
+        guard trainX.count == trainY.count else { return nil }
+        let (trainX, trainY, keptIndices): ([[Double]], [Double], [Int]) = droppingMissing
+            ? MissingData.dropping(trainX: trainX, trainY: trainY)
+            : (trainX, trainY, Array(trainX.indices))
+        guard !trainX.isEmpty,
               span > 0, span <= 1, (0...2).contains(degree),
               trainX.allSatisfy({ $0.count == trainX[0].count }),
               trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
@@ -173,7 +193,8 @@ public struct Loess: Sendable {
         let rss = zip(trainY, fitted).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
         let sigma = sqrt(rss / max(Double(n) - trace, 1))
         return Loess(trainX: trainX, trainY: trainY, span: span, degree: degree,
-                     fittedValues: fitted, sigma: sigma, trace: trace, weights: robust)
+                     fittedValues: fitted, sigma: sigma, trace: trace, weights: robust,
+                     keptIndices: keptIndices)
     }
 
     /// Max neighbor distance (bandwidth); 0 when all neighbors coincide.
@@ -237,8 +258,13 @@ public struct Loess: Sendable {
     }
 
     /// Predict at `x` using the final robust weights (fallback cascade inside).
-    public func predict(_ x: [Double]) -> Double {
+    ///
+    /// `extrapolation` governs outside-hull queries (default `.polynomial`
+    /// preserves historical behavior exactly).
+    public func predict(_ x: [Double], extrapolation: ExtrapolationPolicy = .polynomial) -> Double {
         guard x.count == trainX[0].count else { return .nan }
+        if let v = Loess.extrapolatedValue(x, trainX: trainX, fittedValues: fittedValues,
+                                           policy: extrapolation) { return v }
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         // Single-shot query: skip the tree build (see NeighborSearch).
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
@@ -246,24 +272,112 @@ public struct Loess: Sendable {
                               at: x, neighborhood: k, robust: weights).value
     }
 
+    /// Non-polynomial extrapolation override at `x` (nil = proceed locally).
+    /// Shared by `predict` and `standardError` on every path.
+    static func extrapolatedValue(_ x: [Double], trainX: [[Double]], fittedValues: [Double],
+                                  policy: ExtrapolationPolicy) -> Double? {
+        switch policy {
+        case .polynomial:
+            return nil
+        case .nearest:
+            guard !BoundingBox(trainX).contains(x) else { return nil }
+            guard let j = Loess.nearestIndices(trainX, to: x, count: 1).first else { return .nan }
+            return fittedValues[j]
+        case .unavailable:
+            return BoundingBox(trainX).contains(x) ? nil : .nan
+        }
+    }
+
     /// Predictions over many queries (one shared neighbor index — much
     /// cheaper than looping `predict(_:)`).
-    public func predict(_ xs: [[Double]]) -> [Double] {
+    public func predict(_ xs: [[Double]], extrapolation: ExtrapolationPolicy = .polynomial) -> [Double] {
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         let search = NeighborSearch(trainX: trainX)
+        let box = BoundingBox(trainX)
         let trainX = trainX
         let trainY = trainY
         let degree = degree
         let weights = weights
+        let fittedValues = fittedValues
+        let policy = extrapolation
         return xs.map { x in
             guard x.count == trainX[0].count else { return .nan }
+            if !box.contains(x) {
+                switch policy {
+                case .polynomial:
+                    break
+                case .nearest:
+                    guard let j = search.nearest(to: x, count: 1).first else { return .nan }
+                    return fittedValues[j]
+                case .unavailable:
+                    return .nan
+                }
+            }
             return Loess.localFit(search: search, trainY: trainY, degree: degree,
                                   at: x, neighborhood: k, robust: weights).value
         }
     }
 
     /// Concurrent batch predictions (identical to `predict(_:)`).
-    public func predictConcurrently(_ xs: [[Double]]) async -> [Double] {
+    public func predictConcurrently(_ xs: [[Double]],
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let box = BoundingBox(trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        let fittedValues = fittedValues
+        let policy = extrapolation
+        return await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return .nan }
+            if !box.contains(x) {
+                switch policy {
+                case .polynomial:
+                    break
+                case .nearest:
+                    guard let j = search.nearest(to: x, count: 1).first else { return .nan }
+                    return fittedValues[j]
+                case .unavailable:
+                    return .nan
+                }
+            }
+            return Loess.localFit(search: search, trainY: trainY, degree: degree,
+                                  at: x, neighborhood: k, robust: weights).value
+        }
+    }
+
+    /// Gradient ∇ŷ(x): partial derivatives from the local polynomial's
+    /// first-order coefficients. Nil for degree-0 fits and degenerate
+    /// neighborhoods. Gradients are local-polynomial by construction and
+    /// ignore the extrapolation policy (documented limitation).
+    public func gradient(at x: [Double]) -> [Double]? {
+        guard x.count == trainX[0].count, !x.isEmpty else { return nil }
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        return Loess.gradientAt(search: search, trainY: trainY, degree: degree,
+                                at: x, neighborhood: k, robust: weights)
+    }
+
+    /// Gradients over many queries (one shared neighbor index).
+    public func gradients(at xs: [[Double]]) -> [[Double]?] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        return xs.map { x in
+            guard x.count == trainX[0].count, !x.isEmpty else { return nil }
+            return Loess.gradientAt(search: search, trainY: trainY, degree: degree,
+                                    at: x, neighborhood: k, robust: weights)
+        }
+    }
+
+    /// Concurrent batch gradients (identical to `gradients(at:)`).
+    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         let search = NeighborSearch(trainX: trainX)
         let trainX = trainX
@@ -272,48 +386,106 @@ public struct Loess: Sendable {
         let weights = weights
         return await concurrentMap(over: xs.count) { i in
             let x = xs[i]
-            guard x.count == trainX[0].count else { return .nan }
-            return Loess.localFit(search: search, trainY: trainY, degree: degree,
-                                  at: x, neighborhood: k, robust: weights).value
+            guard x.count == trainX[0].count, !x.isEmpty else { return nil }
+            return Loess.gradientAt(search: search, trainY: trainY, degree: degree,
+                                    at: x, neighborhood: k, robust: weights)
         }
     }
 
+    /// Gradient kernel: first-order coefficients of the local fit.
+    static func gradientAt(search: NeighborSearch, trainY: [Double], degree: Int,
+                           at x: [Double], neighborhood k: Int, robust: [Double]) -> [Double]? {
+        guard degree >= 1, !x.isEmpty else { return nil }
+        let trainX = search.trainingPoints
+        let nb = search.nearest(to: x, count: k)
+        let h = Loess.bandwidth(trainX: trainX, indices: nb, at: x)
+        var rows: [[Double]] = [], vals: [Double] = [], wts: [Double] = []
+        for j in nb {
+            let d = sqrt(zip(trainX[j], x).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) })
+            let lw = h <= 0 ? 1 : LoessWeight.tricube(d / h)
+            let ww = lw * robust[j]
+            if ww > 0 {
+                rows.append(Loess.basis(trainX[j], center: x, degree: degree))
+                vals.append(trainY[j])
+                wts.append(ww)
+            }
+        }
+        guard !wts.isEmpty else { return nil }
+        guard let r = LocalPolynomial.fitWeighted(rows: rows, values: vals,
+                                                  weights: wts, track: nil) else { return nil }
+        let p = x.count
+        guard r.coefficients.count >= 1 + p else { return nil }
+        return Array(r.coefficients[1...p])
+    }
+
     /// Approximate standard error σ̂·‖l(x)‖ with the equivalent kernel l(x).
-    public func standardError(at x: [Double]) -> Double? {
+    ///
+    /// Under `.nearest`, the error is evaluated at the nearest training
+    /// point (consistently with the value); under `.unavailable`, nil.
+    public func standardError(at x: [Double],
+                              extrapolation: ExtrapolationPolicy = .polynomial) -> Double? {
         guard x.count == trainX[0].count else { return nil }
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         // Single-shot query: skip the tree build (see NeighborSearch).
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let query = Loess.policyQuery(x, trainX: trainX, search: search, policy: extrapolation)
+        guard let q = query else { return nil }
         return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
-                                          at: x, neighborhood: k)
+                                          at: q, neighborhood: k)
+    }
+
+    /// Resolve the evaluation point under the policy (nil = unavailable).
+    /// Shared by `standardError` on every path; `predict` uses the lighter
+    /// `extrapolatedValue` (values need no kernel work).
+    static func policyQuery(_ x: [Double], trainX: [[Double]], search: NeighborSearch,
+                            policy: ExtrapolationPolicy) -> [Double]? {
+        switch policy {
+        case .polynomial:
+            return x
+        case .nearest:
+            guard !BoundingBox(trainX).contains(x) else { return x }
+            guard let j = search.nearest(to: x, count: 1).first else { return nil }
+            return trainX[j]
+        case .unavailable:
+            return BoundingBox(trainX).contains(x) ? x : nil
+        }
     }
 
     /// Standard errors over many queries (one shared neighbor index).
     /// Entries are nil exactly where `standardError(at:)` is nil.
-    public func standardErrors(at xs: [[Double]]) -> [Double?] {
-        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
-        let search = NeighborSearch(trainX: trainX)
-        let sigma = sigma
-        let degree = degree
-        return xs.map { x in
-            guard x.count == trainX[0].count else { return nil }
-            return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
-                                              at: x, neighborhood: k)
-        }
-    }
-
-    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
-    public func standardErrorsConcurrently(at xs: [[Double]]) async -> [Double?] {
+    public func standardErrors(at xs: [[Double]],
+                               extrapolation: ExtrapolationPolicy = .polynomial) -> [Double?] {
         let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
         let search = NeighborSearch(trainX: trainX)
         let sigma = sigma
         let degree = degree
         let trainX = trainX
+        let policy = extrapolation
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return nil }
+            guard let q = Loess.policyQuery(x, trainX: trainX, search: search,
+                                            policy: policy) else { return nil }
+            return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
+                                              at: q, neighborhood: k)
+        }
+    }
+
+    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
+    public func standardErrorsConcurrently(at xs: [[Double]],
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+        let k = min(trainX.count, max(Int(ceil(span * Double(trainX.count))), 1))
+        let search = NeighborSearch(trainX: trainX)
+        let sigma = sigma
+        let degree = degree
+        let trainX = trainX
+        let policy = extrapolation
         return await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return nil }
+            guard let q = Loess.policyQuery(x, trainX: trainX, search: search,
+                                            policy: policy) else { return nil }
             return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
-                                              at: x, neighborhood: k)
+                                              at: q, neighborhood: k)
         }
     }
 
@@ -361,12 +533,14 @@ public struct Loess: Sendable {
     /// GCV score over candidate spans (uses each fit's trace).
     public static func selectSpan(trainX: [[Double]], trainY: [Double],
                                   spans: [Double], degree: Int = 2,
-                                  robustIterations: Int = 4) -> (span: Double, fit: Loess)? {
+                                  robustIterations: Int = 4,
+                                  droppingMissing: Bool = false) -> (span: Double, fit: Loess)? {
         var best: (span: Double, fit: Loess)?
         var bestScore = Double.infinity
         for span in spans {
             guard let fit = Loess.fit(trainX: trainX, trainY: trainY, span: span,
-                                      degree: degree, robustIterations: robustIterations) else { continue }
+                                      degree: degree, robustIterations: robustIterations,
+                                      droppingMissing: droppingMissing) else { continue }
             let n = Double(trainX.count)
             let rss = zip(trainY, fit.fittedValues).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
             let denom = max(1 - fit.trace / n, 1e-6)

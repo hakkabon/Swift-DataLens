@@ -25,4 +25,5 @@ fit.predict([7.5]) // 14.0
 - ``AutomaticSmoother``
 - ``FittedSmoother``
 - ``TuningSummary``
+- ``ExtrapolationPolicy``
 - ``DataLens``

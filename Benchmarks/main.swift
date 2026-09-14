@@ -54,3 +54,7 @@ bench("loess batch predict x200", iterations: 5, warmup: 1) {
 bench("auto tune n=60", iterations: 1, warmup: 0) {
     _ = AutomaticSmoother.fit(trainX: adaptX, trainY: adaptY, degree: 2)
 }
+// Gradient grid (x200): slopes alongside the smoother.
+bench("loess gradient x200", iterations: 5, warmup: 1) {
+    _ = loessFit.gradients(at: gridX)
+}

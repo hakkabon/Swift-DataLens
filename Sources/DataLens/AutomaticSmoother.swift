@@ -17,38 +17,96 @@ public enum FittedSmoother: Sendable {
     }
 
     /// Predict at `x` (`.nan` on width mismatch, mirroring each smoother).
-    public func predict(_ x: [Double]) -> Double {
+    public func predict(_ x: [Double], extrapolation: ExtrapolationPolicy = .polynomial) -> Double {
         switch self {
-        case .loess(let fit): fit.predict(x)
-        case .adaptive(let fit): fit.predict(x)
-        case .likelihood(let fit): fit.predict(x)
+        case .loess(let fit): fit.predict(x, extrapolation: extrapolation)
+        case .adaptive(let fit): fit.predict(x, extrapolation: extrapolation)
+        case .likelihood(let fit): fit.predict(x, extrapolation: extrapolation)
         }
     }
 
     /// Predictions over many queries.
-    public func predict(_ xs: [[Double]]) -> [Double] {
+    public func predict(_ xs: [[Double]], extrapolation: ExtrapolationPolicy = .polynomial) -> [Double] {
         switch self {
-        case .loess(let fit): fit.predict(xs)
-        case .adaptive(let fit): fit.predict(xs)
-        case .likelihood(let fit): fit.predict(xs)
+        case .loess(let fit): fit.predict(xs, extrapolation: extrapolation)
+        case .adaptive(let fit): fit.predict(xs, extrapolation: extrapolation)
+        case .likelihood(let fit): fit.predict(xs, extrapolation: extrapolation)
+        }
+    }
+
+    /// Concurrent batch predictions (identical to `predict(_:)`).
+    public func predictConcurrently(_ xs: [[Double]],
+                                    extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double] {
+        switch self {
+        case .loess(let fit): await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        case .adaptive(let fit): await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        case .likelihood(let fit): await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        }
+    }
+
+    /// Gradient ∇ŷ(x) (nil where the underlying smoother says nil).
+    public func gradient(at x: [Double]) -> [Double]? {
+        switch self {
+        case .loess(let fit): fit.gradient(at: x)
+        case .adaptive(let fit): fit.gradient(at: x)
+        case .likelihood(let fit): fit.gradient(at: x)
+        }
+    }
+
+    /// Gradients over many queries.
+    public func gradients(at xs: [[Double]]) -> [[Double]?] {
+        switch self {
+        case .loess(let fit): fit.gradients(at: xs)
+        case .adaptive(let fit): fit.gradients(at: xs)
+        case .likelihood(let fit): fit.gradients(at: xs)
+        }
+    }
+
+    /// Concurrent batch gradients (identical to `gradients(at:)`).
+    public func gradientsConcurrently(at xs: [[Double]]) async -> [[Double]?] {
+        switch self {
+        case .loess(let fit): await fit.gradientsConcurrently(at: xs)
+        case .adaptive(let fit): await fit.gradientsConcurrently(at: xs)
+        case .likelihood(let fit): await fit.gradientsConcurrently(at: xs)
+        }
+    }
+
+    /// Kept input row indices (identity when nothing was dropped).
+    public var keptIndices: [Int] {
+        switch self {
+        case .loess(let fit): fit.keptIndices
+        case .adaptive(let fit): fit.keptIndices
+        case .likelihood(let fit): fit.keptIndices
         }
     }
 
     /// Standard error at `x` (nil where the underlying smoother says nil).
-    public func standardError(at x: [Double]) -> Double? {
+    public func standardError(at x: [Double],
+                              extrapolation: ExtrapolationPolicy = .polynomial) -> Double? {
         switch self {
-        case .loess(let fit): fit.standardError(at: x)
-        case .adaptive(let fit): fit.standardError(at: x)
-        case .likelihood(let fit): fit.standardError(at: x)
+        case .loess(let fit): fit.standardError(at: x, extrapolation: extrapolation)
+        case .adaptive(let fit): fit.standardError(at: x, extrapolation: extrapolation)
+        case .likelihood(let fit): fit.standardError(at: x, extrapolation: extrapolation)
         }
     }
 
     /// Standard errors over many queries.
-    public func standardErrors(at xs: [[Double]]) -> [Double?] {
+    public func standardErrors(at xs: [[Double]],
+                               extrapolation: ExtrapolationPolicy = .polynomial) -> [Double?] {
         switch self {
-        case .loess(let fit): fit.standardErrors(at: xs)
-        case .adaptive(let fit): fit.standardErrors(at: xs)
-        case .likelihood(let fit): fit.standardErrors(at: xs)
+        case .loess(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
+        case .adaptive(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
+        case .likelihood(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
+        }
+    }
+
+    /// Concurrent batch standard errors (identical to `standardErrors(at:)`).
+    public func standardErrorsConcurrently(at xs: [[Double]],
+                                           extrapolation: ExtrapolationPolicy = .polynomial) async -> [Double?] {
+        switch self {
+        case .loess(let fit): await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
+        case .adaptive(let fit): await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
+        case .likelihood(let fit): await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
         }
     }
 }
@@ -116,19 +174,22 @@ public enum AutomaticSmoother {
     /// fixed-span `Loess` on GCV. Returns the winner, its GCV, and a detail
     /// string. Notes adaptive unavailability (tiny inputs) for the summary.
     static func tuneContinuous(trainX: [[Double]], trainY: [Double], degree: Int,
-                               spans: [Double], robustIterations: Int,
+                               spans: [Double], robustIterations: Int, droppingMissing: Bool,
                                notes: inout [String]) -> (fit: FittedSmoother, score: Double, detail: String)? {
         var best: (fit: FittedSmoother, score: Double, detail: String)?
         if let adaptive = AdaptiveLoess.fit(trainX: trainX, trainY: trainY, degree: degree,
-                                            robustIterations: robustIterations) {
-            let score = gcv(fitted: adaptive.fittedValues, trainY: trainY, trace: adaptive.trace)
+                                            robustIterations: robustIterations,
+                                            droppingMissing: droppingMissing) {
+            // GCV on the fit's own (possibly dropped) rows.
+            let score = gcv(fitted: adaptive.fittedValues, trainY: adaptive.trainY, trace: adaptive.trace)
             best = (.adaptive(adaptive), score, "per-point AICc neighborhoods (GCV \(score))")
         } else {
             notes.append("AdaptiveLoess has no valid neighborhood here; comparing fixed spans only.")
         }
         if let (_, loess) = Loess.selectSpan(trainX: trainX, trainY: trainY, spans: spans,
-                                             degree: degree, robustIterations: robustIterations) {
-            let score = gcv(fitted: loess.fittedValues, trainY: trainY, trace: loess.trace)
+                                             degree: degree, robustIterations: robustIterations,
+                                             droppingMissing: droppingMissing) {
+            let score = gcv(fitted: loess.fittedValues, trainY: loess.trainY, trace: loess.trace)
             let detail = "span \(loess.span) (GCV \(score))"
             if let current = best {
                 if score < current.score { best = (.loess(loess), score, detail) }
@@ -141,10 +202,11 @@ public enum AutomaticSmoother {
 
     /// Tune one likelihood family by AIC (deviance + 2·trace).
     static func tuneLikelihood(trainX: [[Double]], trainY: [Double], degree: Int,
-                               family: LocalLikelihoodFamily,
+                               family: LocalLikelihoodFamily, droppingMissing: Bool,
                                spans: [Double]) -> (fit: FittedSmoother, score: Double, detail: String)? {
         guard let (_, fit) = LocalLikelihood.selectSpan(trainX: trainX, trainY: trainY, spans: spans,
-                                                        degree: degree, family: family) else { return nil }
+                                                        degree: degree, family: family,
+                                                        droppingMissing: droppingMissing) else { return nil }
         let score = fit.deviance + 2 * fit.trace
         let name: String
         switch family {
@@ -156,19 +218,23 @@ public enum AutomaticSmoother {
     }
 
     /// Fit automatically: route by response type, tune, and report.
+    ///
+    /// With `droppingMissing`, classification inspects the finite responses
+    /// and the legs drop non-finite rows (their `keptIndices` stay correct).
     public static func fit(trainX: [[Double]], trainY: [Double], degree: Int = 2,
                            spans: [Double]? = nil,
-                           robustIterations: Int = 4) -> (fit: FittedSmoother, summary: TuningSummary)? {
-        guard !trainX.isEmpty, trainX.count == trainY.count, (0...2).contains(degree),
-              trainX.allSatisfy({ $0.count == trainX[0].count }),
-              trainX.flatMap({ $0 }).allSatisfy({ $0.isFinite }),
-              trainY.allSatisfy({ $0.isFinite }) else { return nil }
+                           robustIterations: Int = 4,
+                           droppingMissing: Bool = false) -> (fit: FittedSmoother, summary: TuningSummary)? {
+        guard trainX.count == trainY.count, (0...2).contains(degree), !trainX.isEmpty else { return nil }
+        let classY = droppingMissing ? trainY.filter({ $0.isFinite }) : trainY
+        guard !classY.isEmpty else { return nil }
         let spans = spans ?? defaultSpans
         var notes: [String] = []
-        switch classify(trainY) {
+        switch classify(classY) {
         case .binary:
             if let (fit, score, detail) = tuneLikelihood(trainX: trainX, trainY: trainY, degree: degree,
-                                                        family: .binomial, spans: spans) {
+                                                        family: .binomial, droppingMissing: droppingMissing,
+                                                        spans: spans) {
                 let summary = TuningSummary(
                     smoother: "LocalLikelihood", detail: detail, score: score,
                     reason: "Binary responses route to binomial local likelihood; span selected by AIC.",
@@ -178,10 +244,12 @@ public enum AutomaticSmoother {
             }
             notes.append("Binomial tuning failed; falling back to continuous smoothers.")
             return tunedContinuousFallback(trainX: trainX, trainY: trainY, degree: degree,
-                                           spans: spans, robustIterations: robustIterations, notes: notes)
+                                           spans: spans, robustIterations: robustIterations,
+                                           droppingMissing: droppingMissing, notes: notes)
         case .counts:
             if let (fit, score, detail) = tuneLikelihood(trainX: trainX, trainY: trainY, degree: degree,
-                                                        family: .poisson, spans: spans) {
+                                                        family: .poisson, droppingMissing: droppingMissing,
+                                                        spans: spans) {
                 let summary = TuningSummary(
                     smoother: "LocalLikelihood", detail: detail, score: score,
                     reason: "Non-negative integer responses route to Poisson local likelihood; span selected by AIC.",
@@ -191,19 +259,22 @@ public enum AutomaticSmoother {
             }
             notes.append("Poisson tuning failed; falling back to continuous smoothers.")
             return tunedContinuousFallback(trainX: trainX, trainY: trainY, degree: degree,
-                                           spans: spans, robustIterations: robustIterations, notes: notes)
+                                           spans: spans, robustIterations: robustIterations,
+                                           droppingMissing: droppingMissing, notes: notes)
         case .continuous:
             return tunedContinuousFallback(trainX: trainX, trainY: trainY, degree: degree,
-                                           spans: spans, robustIterations: robustIterations, notes: notes)
+                                           spans: spans, robustIterations: robustIterations,
+                                           droppingMissing: droppingMissing, notes: notes)
         }
     }
 
     private static func tunedContinuousFallback(trainX: [[Double]], trainY: [Double], degree: Int,
-                                                spans: [Double], robustIterations: Int,
+                                                spans: [Double], robustIterations: Int, droppingMissing: Bool,
                                                 notes: [String]) -> (fit: FittedSmoother, summary: TuningSummary)? {
         var notes = notes
         guard let (fit, score, detail) = tuneContinuous(trainX: trainX, trainY: trainY, degree: degree,
                                                        spans: spans, robustIterations: robustIterations,
+                                                       droppingMissing: droppingMissing,
                                                        notes: &notes) else { return nil }
         let smoother: String
         let reason: String

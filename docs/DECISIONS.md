@@ -218,3 +218,20 @@ forward), so nothing downstream is lost by going through automation.
 Measured: heterogeneous truth routes adaptive and beats every fixed span;
 binary/counts recoveries hold at the likelihood tests' margins.
 `DataLens.version` → 0.5.0.
+
+## 14. Predictive flexibility: gradients, extrapolation, missing data (0.6.0)
+
+Three additions, all default-preserving (existing calls behave exactly as
+before). **(1) Gradients** are first-order local coefficients (exact on
+lines/planes; sine tracks cosine within 0.15); degree-0 and degenerate
+fits yield nil, honestly. **(2) Extrapolation is a query-time policy**
+(`.polynomial` default = status quo, `.nearest` = edge fitted value,
+`.unavailable` = NaN/nil), never a refit — the fit is policy-independent,
+so switching is free. The hull is a per-dimension box, documented as such;
+`.nearest` SEs come from the edge point, consistently with the value.
+Gradients deliberately ignore the policy (local-polynomial objects).
+**(3) Missing data drops rows** (`droppingMissing`, off by default) with
+`keptIndices` reporting survivors for join-back; width mismatches still
+fail loudly (schema errors are not missing data), and the count-mismatch
+guard runs before dropping so truncation can never hide it. Appended-NaN
+fits are bit-identical to clean fits. `DataLens.version` → 0.6.0.
