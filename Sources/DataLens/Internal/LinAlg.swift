@@ -1,6 +1,6 @@
 import Foundation
+#if canImport(NumericCoreAccelerate)
 import NumericCore
-#if canImport(Accelerate)
 import NumericCoreAccelerate
 #endif
 
@@ -99,7 +99,7 @@ enum LinAlg {
     /// Least-squares solution min ‖y − Xβ‖ via thin Householder QR.
     /// Returns `nil` when X is rank deficient.
     static func leastSquares(design X: [[Double]], response y: [Double]) -> [Double]? {
-        #if canImport(Accelerate)
+        #if canImport(NumericCoreAccelerate)
         do {
             let a = try Matrix<Double>(rows: X)
             let b = Vector(y)

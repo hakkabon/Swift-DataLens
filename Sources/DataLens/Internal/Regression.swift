@@ -1,6 +1,6 @@
 import Foundation
+#if canImport(NumericCoreAccelerate)
 import NumericCore
-#if canImport(Accelerate)
 import NumericCoreAccelerate
 #endif
 
@@ -17,7 +17,7 @@ enum Regression {
     /// Gaussian elimination in the Linux fallback). Returns `nil` on
     /// singularity (near-zero pivot / rank-deficient R diagonal).
     static func solve(_ A: [[Double]], _ b: [Double]) -> [Double]? {
-        #if canImport(Accelerate)
+        #if canImport(NumericCoreAccelerate)
         do {
             let a = try Matrix<Double>(rows: A)
             let rhs = Vector(b)
@@ -41,7 +41,7 @@ enum Regression {
     ///   only. Call only with symmetric-by-construction matrices; otherwise
     ///   use `solve(_:_:)`.
     static func solveSPD(_ A: [[Double]], _ b: [Double]) -> [Double]? {
-        #if canImport(Accelerate)
+        #if canImport(NumericCoreAccelerate)
         do {
             let a = try Matrix<Double>(rows: A)
             let rhs = Vector(b)

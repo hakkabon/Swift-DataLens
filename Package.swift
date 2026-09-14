@@ -21,9 +21,14 @@ let package = Package(
         .target(
             name: "DataLens",
             dependencies: [
-                .product(name: "NumericCore", package: "Swift-NumericCore"),
-                // Apple-only (imports Accelerate); Linux builds use the
-                // vendored fallback via `#if canImport(Accelerate)`.
+                // Apple-only (imports Accelerate, and its XCFramework has
+                // no Linux slice); Linux builds use the vendored fallback
+                // via `#if canImport(NumericCoreAccelerate)`.
+                .product(
+                    name: "NumericCore",
+                    package: "Swift-NumericCore",
+                    condition: .when(platforms: [.macOS, .iOS, .macCatalyst, .tvOS, .watchOS, .visionOS])
+                ),
                 .product(
                     name: "NumericCoreAccelerate",
                     package: "Swift-NumericCore",

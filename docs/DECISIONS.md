@@ -235,3 +235,21 @@ Gradients deliberately ignore the policy (local-polynomial objects).
 fail loudly (schema errors are not missing data), and the count-mismatch
 guard runs before dropping so truncation can never hide it. Appended-NaN
 fits are bit-identical to clean fits. `DataLens.version` → 0.6.0.
+
+## 15. Linux skips NumericCore entirely (CI red → green)
+
+The Linux CI job failed without compiling a line of DataLens: the
+`NumericCoreFFI.xcframework` ships ios-arm64, ios-simulator, and macOS
+slices but no Linux slice, so `NCBindings` (which `NumericCore` depends
+on, which we import) fails with ~100 missing-symbol errors
+(`RustBuffer`, `uniffi_*`, …). That is an upstream packaging bug — the
+fix belongs in Swift-NumericCore (Linux slice, or conditional FFI with
+the pure-Swift fallback it already has). The DataLens-side hardening,
+done here: both NumericCore products are now Apple-platform-conditional
+in `Package.swift`, and `LinAlg`/`Regression` gate on
+`canImport(NumericCoreAccelerate)` (imports and code paths together) —
+Linux builds link zero NumericCore modules and run the vendored
+Householder/elimination bodies, which is exactly what those bodies were
+kept for. macOS still binds LAPACK (both modules present in the build,
+62 green, bench signature unchanged). No version bump: behavior is
+identical on every platform that built before.
