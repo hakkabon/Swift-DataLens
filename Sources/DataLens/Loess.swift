@@ -541,8 +541,12 @@ public struct Loess: Sendable {
             guard let fit = Loess.fit(trainX: trainX, trainY: trainY, span: span,
                                       degree: degree, robustIterations: robustIterations,
                                       droppingMissing: droppingMissing) else { continue }
-            let n = Double(trainX.count)
-            let rss = zip(trainY, fit.fittedValues).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
+            // Score on the fit's own (possibly dropped) rows: zipping the
+            // pre-drop trainY here misaligns pairs and poisons rss with NaN
+            // whenever any row was dropped (score NaN never beats infinity,
+            // so selection silently returned nil on all missing-data input).
+            let n = Double(fit.trainY.count)
+            let rss = zip(fit.trainY, fit.fittedValues).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
             let denom = max(1 - fit.trace / n, 1e-6)
             let score = (rss / n) / (denom * denom)
             if score < bestScore { bestScore = score; best = (span, fit) }

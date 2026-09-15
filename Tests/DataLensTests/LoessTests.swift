@@ -100,4 +100,32 @@ struct LoessTests {
         #expect(Loess.fit(trainX: [[0]], trainY: [1, 2]) == nil)
         #expect(Loess.fit(trainX: [[0]], trainY: [1], span: 1.5) == nil)
     }
+
+    @Test func spanSelectionScoresDroppedRows() {
+        // Regression: selectSpan zipped pre-drop trainY against post-drop
+        // fitted values, so any missing row NaN-poisoned rss and selection
+        // returned nil — masked whenever the adaptive contender won.
+        var rng = SeedableRandomNumberGenerator(seed: 2204)
+        var cache = GaussianCache()
+        let n = 50
+        let xs = (0..<n).map { [Double($0) / 10] }
+        var ys = xs.map { sin($0[0]) + 0.1 * cache.nextStandardNormal(using: &rng) }
+        for i in stride(from: 0, to: n, by: 13) { ys[i] = .nan }
+        let dropped = (0..<n).filter { !ys[$0].isFinite }.count
+        #expect(dropped > 0)
+        guard let (span, fit) = Loess.selectSpan(
+            trainX: xs, trainY: ys, spans: [0.2, 0.4, 0.6, 0.9],
+            degree: 1, robustIterations: 1, droppingMissing: true
+        ) else {
+            Issue.record("selectSpan returned nil with dropped rows")
+            return
+        }
+        #expect([0.2, 0.4, 0.6, 0.9].contains(span))
+        #expect(fit.keptIndices.count == n - dropped)
+        // The winner still tracks the sine wave on surviving rows.
+        let rmse = sqrt(zip(fit.trainY, fit.fittedValues).reduce(0.0) {
+            $0 + pow($1.0 - $1.1, 2)
+        } / Double(fit.trainY.count))
+        #expect(rmse < 0.25)
+    }
 }

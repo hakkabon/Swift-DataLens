@@ -115,4 +115,40 @@ struct AutomaticSmootherTests {
         #expect(AutomaticSmoother.fit(trainX: [[0]], trainY: [1], degree: 5) == nil)
         #expect(AutomaticSmoother.fit(trainX: [[0]], trainY: [0.5], degree: 1) == nil)
     }
+
+    @Test func shallowTuningSkipsAdaptiveContender() {
+        // Continuous sine truth: shallow selects fixed-span Loess, says
+        // the adaptive leg was skipped, and still recovers the curve.
+        var rng = SeedableRandomNumberGenerator(seed: 7010)
+        var cache = GaussianCache()
+        let xs = (0..<60).map { [Double($0) / 10] }
+        let truth = xs.map { sin($0[0]) }
+        let ys = xs.map { sin($0[0]) + 0.1 * cache.nextStandardNormal(using: &rng) }
+        let (fit, summary) = AutomaticSmoother.fit(trainX: xs, trainY: ys, adaptiveContender: false)!
+        guard case .loess = fit else {
+            Issue.record("expected loess fit, got \(fit)")
+            return
+        }
+        #expect(summary.smoother == "Loess")
+        #expect(summary.reason.contains("adaptive contender disabled"))
+        #expect(summary.notes.contains(
+            "Adaptive contender disabled (shallow tuning); comparing fixed spans only."))
+        #expect(rmse(fit.fittedValues, truth) < 0.15)
+    }
+
+    @Test func shallowTuningPreservesRouting() {
+        // The flag only trims the continuous competition: binary data
+        // still routes to binomial local likelihood.
+        var rng = SeedableRandomNumberGenerator(seed: 7011)
+        let xs = (0..<60).map { _ in [Double.random(in: -2...2, using: &rng)] }
+        let truth = xs.map { 1 / (1 + exp(-(1.5 * $0[0]))) }
+        let ys = zip(xs, truth).map { Double.random(in: 0..<1, using: &rng) < $0.1 ? 1.0 : 0.0 }
+        let (fit, summary) = AutomaticSmoother.fit(trainX: xs, trainY: ys, adaptiveContender: false)!
+        guard case .likelihood(let ll) = fit else {
+            Issue.record("expected likelihood fit, got \(fit)")
+            return
+        }
+        #expect(ll.family == .binomial)
+        #expect(summary.smoother == "LocalLikelihood")
+    }
 }

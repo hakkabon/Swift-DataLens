@@ -173,18 +173,25 @@ public enum AutomaticSmoother {
     /// Tune the continuous smoothers: `AdaptiveLoess` against the best
     /// fixed-span `Loess` on GCV. Returns the winner, its GCV, and a detail
     /// string. Notes adaptive unavailability (tiny inputs) for the summary.
+    /// With `adaptiveContender: false` the adaptive leg is skipped entirely
+    /// (shallow tuning for interactive use) and only fixed spans compete.
     static func tuneContinuous(trainX: [[Double]], trainY: [Double], degree: Int,
                                spans: [Double], robustIterations: Int, droppingMissing: Bool,
+                               adaptiveContender: Bool = true,
                                notes: inout [String]) -> (fit: FittedSmoother, score: Double, detail: String)? {
         var best: (fit: FittedSmoother, score: Double, detail: String)?
-        if let adaptive = AdaptiveLoess.fit(trainX: trainX, trainY: trainY, degree: degree,
-                                            robustIterations: robustIterations,
-                                            droppingMissing: droppingMissing) {
-            // GCV on the fit's own (possibly dropped) rows.
-            let score = gcv(fitted: adaptive.fittedValues, trainY: adaptive.trainY, trace: adaptive.trace)
-            best = (.adaptive(adaptive), score, "per-point AICc neighborhoods (GCV \(score))")
+        if adaptiveContender {
+            if let adaptive = AdaptiveLoess.fit(trainX: trainX, trainY: trainY, degree: degree,
+                                                robustIterations: robustIterations,
+                                                droppingMissing: droppingMissing) {
+                // GCV on the fit's own (possibly dropped) rows.
+                let score = gcv(fitted: adaptive.fittedValues, trainY: adaptive.trainY, trace: adaptive.trace)
+                best = (.adaptive(adaptive), score, "per-point AICc neighborhoods (GCV \(score))")
+            } else {
+                notes.append("AdaptiveLoess has no valid neighborhood here; comparing fixed spans only.")
+            }
         } else {
-            notes.append("AdaptiveLoess has no valid neighborhood here; comparing fixed spans only.")
+            notes.append("Adaptive contender disabled (shallow tuning); comparing fixed spans only.")
         }
         if let (_, loess) = Loess.selectSpan(trainX: trainX, trainY: trainY, spans: spans,
                                              degree: degree, robustIterations: robustIterations,
@@ -221,10 +228,14 @@ public enum AutomaticSmoother {
     ///
     /// With `droppingMissing`, classification inspects the finite responses
     /// and the legs drop non-finite rows (their `keptIndices` stay correct).
+    /// With `adaptiveContender: false`, the adaptive leg is skipped and
+    /// only fixed-span `Loess` competes (shallow tuning for interactive
+    /// use); the default `true` preserves the full competition.
     public static func fit(trainX: [[Double]], trainY: [Double], degree: Int = 2,
                            spans: [Double]? = nil,
                            robustIterations: Int = 4,
-                           droppingMissing: Bool = false) -> (fit: FittedSmoother, summary: TuningSummary)? {
+                           droppingMissing: Bool = false,
+                           adaptiveContender: Bool = true) -> (fit: FittedSmoother, summary: TuningSummary)? {
         guard trainX.count == trainY.count, (0...2).contains(degree), !trainX.isEmpty else { return nil }
         let classY = droppingMissing ? trainY.filter({ $0.isFinite }) : trainY
         guard !classY.isEmpty else { return nil }
@@ -245,7 +256,8 @@ public enum AutomaticSmoother {
             notes.append("Binomial tuning failed; falling back to continuous smoothers.")
             return tunedContinuousFallback(trainX: trainX, trainY: trainY, degree: degree,
                                            spans: spans, robustIterations: robustIterations,
-                                           droppingMissing: droppingMissing, notes: notes)
+                                           droppingMissing: droppingMissing,
+                                           adaptiveContender: adaptiveContender, notes: notes)
         case .counts:
             if let (fit, score, detail) = tuneLikelihood(trainX: trainX, trainY: trainY, degree: degree,
                                                         family: .poisson, droppingMissing: droppingMissing,
@@ -260,21 +272,25 @@ public enum AutomaticSmoother {
             notes.append("Poisson tuning failed; falling back to continuous smoothers.")
             return tunedContinuousFallback(trainX: trainX, trainY: trainY, degree: degree,
                                            spans: spans, robustIterations: robustIterations,
-                                           droppingMissing: droppingMissing, notes: notes)
+                                           droppingMissing: droppingMissing,
+                                           adaptiveContender: adaptiveContender, notes: notes)
         case .continuous:
             return tunedContinuousFallback(trainX: trainX, trainY: trainY, degree: degree,
                                            spans: spans, robustIterations: robustIterations,
-                                           droppingMissing: droppingMissing, notes: notes)
+                                           droppingMissing: droppingMissing,
+                                           adaptiveContender: adaptiveContender, notes: notes)
         }
     }
 
     private static func tunedContinuousFallback(trainX: [[Double]], trainY: [Double], degree: Int,
                                                 spans: [Double], robustIterations: Int, droppingMissing: Bool,
+                                                adaptiveContender: Bool = true,
                                                 notes: [String]) -> (fit: FittedSmoother, summary: TuningSummary)? {
         var notes = notes
         guard let (fit, score, detail) = tuneContinuous(trainX: trainX, trainY: trainY, degree: degree,
                                                        spans: spans, robustIterations: robustIterations,
                                                        droppingMissing: droppingMissing,
+                                                       adaptiveContender: adaptiveContender,
                                                        notes: &notes) else { return nil }
         let smoother: String
         let reason: String
@@ -284,7 +300,9 @@ public enum AutomaticSmoother {
             reason = "Continuous responses; per-point AICc neighborhoods beat fixed-span Loess on GCV."
         case .loess:
             smoother = "Loess"
-            reason = "Continuous responses; fixed-span Loess beat AdaptiveLoess on GCV."
+            reason = adaptiveContender
+                ? "Continuous responses; fixed-span Loess beat AdaptiveLoess on GCV."
+                : "Continuous responses; fixed-span Loess selected by GCV (adaptive contender disabled)."
         case .likelihood:
             smoother = "LocalLikelihood"
             reason = "Continuous responses; likelihood path selected."

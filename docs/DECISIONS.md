@@ -307,3 +307,32 @@ opt-in and documented as approximations. The per-query hull-box rebuild
 was hoisted in the existing batch paths too — pure motion, no numeric
 change, proven by the untouched 65-test suite going 68 green with the 3
 new agreement tests.
+
+## 19. Opt-in shallow tuning via `adaptiveContender`
+
+App-track profiling left the adaptive *fit* as the wall after fast grids
+landed: full auto-tune on 1000 sine rows runs ~44s release, of which the
+adaptive contender is only ~10s at robust-4 (robust refits dominate) —
+but inside the interactive budget (1 span, 1 robust round) it is ~9s of
+~14s. So `AutomaticSmoother.fit` gains `adaptiveContender: Bool = true`:
+`false` skips the adaptive leg, tunes fixed-span Loess only, and records
+the skip in `TuningSummary.notes` (the Loess reason string changes too,
+so no summary ever claims a competition that didn't happen). Routing is
+untouched — binary/counts still try likelihood first — and the default
+preserves exact prior behavior. Measured: 14.1s → 5.2s release on the
+interactive budget; 43.7s → 33.9s on full defaults. The flag trims a
+contender, never quality silently: shallow fits say they are shallow.
+
+## 20. `selectSpan` scored pre-drop rows (latent nil on missing data)
+
+The shallow flag exposed it: `Loess.selectSpan` zipped pre-drop `trainY`
+against post-drop `fittedValues`. Any dropped row misaligned every pair
+and NaN-poisoned rss, so the score never beat infinity and selection
+returned nil on ALL missing-data input. It never surfaced because the
+adaptive contender usually won and the nil Loess leg was silently
+ignored. Fixed by scoring on the fit's own dropped arrays; pinned by a
+regression test proven to fail without the fix. Audit found no sibling:
+every other rss/deviance zip in `Loess`, `AdaptiveLoess`, and
+`LocalLikelihood` operates on post-drop locals inside fit bodies.
+Lesson: cross-boundary zips (caller arrays × fitted arrays) are the
+shape to grep for whenever a new dropping path is added.

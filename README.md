@@ -38,6 +38,8 @@ Local regression in pure Swift — `import DataLens`.
   (binary → binomial, counts → Poisson, else continuous), tunes spans by
   AIC/GCV with adaptive-vs-fixed competition, and reports what it chose
   and why in a printable `TuningSummary` — fallbacks noted, never silent.
+  `adaptiveContender: false` skips the adaptive leg for shallow
+  interactive tuning (same routing, fixed-span Loess only).
 - **Predictive flexibility:** gradients (slopes/trends) on all smoothers,
   explicit extrapolation policies (polynomial/nearest/unavailable) on every
   predict/SE path, and missing-data dropping with survivor indices.
@@ -91,22 +93,23 @@ swift test
 swift test --filter DataLensTests
 ```
 
-68 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+71 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
-recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
+recovery, symmetry, SE/trace bounds, GCV span selection, span
+selection on dropped rows, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
 clouds with duplicates, coincident queries, degenerate inputs, mixed
 tree/brute paths), `SolverSeamTests` (closed-form solves plus the
 rank-deficient/singular/non-PD → nil contract on both solver paths, with
 the Linux fallback Cholesky pinned directly), `AdaptiveLoessTests` (exactness, outlier recovery, directly
 observed adaptivity that beats the best fixed span, homogeneous parity,
-fast-path agreement within half the noise scale),
-`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
+fast-path agreement within half the noise scale),`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
 clamping, AIC span selection), `BatchTests` (batches equal pointwise
 calls, concurrent variants bit-identical incl. fits, cooperative
 cancellation with abort/completion tests),
 `AutomaticSmootherTests` (response-type routing, adaptive win on GCV,
+shallow flag skips the contender with routing intact,
 fallback with a recorded note, invalid input), `FlexibilityTests`
 (derivative exactness + cosine tracking, extrapolation policies on values
 and SEs, missing-data masks with bit-identical clean fits) plus a version
