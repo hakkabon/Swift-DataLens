@@ -2,8 +2,9 @@
 
 Local regression in pure Swift — `import DataLens`.
 
-> Status: Cleveland-style LOESS (`Loess`, frozen), clean-room adaptive
-> smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`), batch
+> Status: Cleveland-style LOESS (`Loess`, frozen), Nadaraya–Watson kernel
+> regression (`NadarayaWatson`), clean-room adaptive smoothing
+> (`AdaptiveLoess`), local likelihood (`LocalLikelihood`), batch
 > evaluation, one-call tuning, plus derivatives, explicit extrapolation,
 > and missing-data handling. Least squares via LAPACK on Apple with a
 > vendored fallback; neighbors via kd-tree or brute force. No GPL `locfit`
@@ -18,6 +19,12 @@ Local regression in pure Swift — `import DataLens`.
   small spans) or brute force, exactly equal on every path; least squares
   via LAPACK (`NumericCoreAccelerate`) on Apple platforms with a vendored
   Householder fallback elsewhere.
+- **Nadaraya–Watson kernel regression (`NadarayaWatson`):** locally
+  constant tricube fits with the same bisquare robustness, SEs, trace,
+  and GCV span selection as `Loess` — bit-identical to
+  `Loess.fit(degree: 0)` by construction (pinned), plus analytic
+  tricube gradients. Release bench: 2.8 ms fit / 1.4 ms x200 grid
+  (n=100; no QR solves anywhere).
 - **Adaptive smoothing (`AdaptiveLoess`, clean-room Loader-style):**
   per-point AICc neighborhood selection (flat stretches average ~2× the
   neighborhoods of curvy ones; beats the best fixed span ~6× on
@@ -93,7 +100,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-71 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+78 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -103,7 +110,10 @@ tree/brute paths), `SolverSeamTests` (closed-form solves plus the
 rank-deficient/singular/non-PD → nil contract on both solver paths, with
 the Linux fallback Cholesky pinned directly), `AdaptiveLoessTests` (exactness, outlier recovery, directly
 observed adaptivity that beats the best fixed span, homogeneous parity,
-fast-path agreement within half the noise scale),`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
+fast-path agreement within half the noise scale),
+`NadarayaWatsonTests` (constant reproduction, bit-parity with degree-0
+Loess, sine recovery, batch/concurrent agreement, analytic-vs-numeric
+gradients, missing-data masks, invalid input),`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
 clamping, AIC span selection), `BatchTests` (batches equal pointwise
 calls, concurrent variants bit-identical incl. fits, cooperative

@@ -336,3 +336,21 @@ every other rss/deviance zip in `Loess`, `AdaptiveLoess`, and
 `LocalLikelihood` operates on post-drop locals inside fit bodies.
 Lesson: cross-boundary zips (caller arrays × fitted arrays) are the
 shape to grep for whenever a new dropping path is added.
+
+## 21. Nadaraya–Watson as a thin wrapper over degree-0 kernels
+
+App-track feature request (old-app parity: kernel regression alongside
+LOESS). Implemented as `NadarayaWatson`, deliberately thin: every local
+evaluation delegates to `Loess.localFit` with degree 0 (identical values,
+fallback cascade, and leverage) and SEs go through
+`Loess.kernelStandardError` the same way — no duplicated math to drift.
+What the type owns: span-fraction neighborhoods (so a tuner can compare
+it against `Loess` directly), the trace/sigma bookkeeping, span
+selection scored on dropped rows (the #20 rule), and analytic tricube
+gradients including bandwidth variation (omitting dh/dx errs by O(1);
+the span neighborhood makes the mean piecewise smooth, so gradient
+tests query off-lattice points and the docs state the branch rule).
+Pinned by bit-parity with `Loess.fit(degree: 0)` — if the kernels ever
+diverge, that test names the commit. Not auto-routed in
+`AutomaticSmoother` (that would silently move every tuned fit); explicit
+selection belongs to the app track.

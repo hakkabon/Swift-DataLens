@@ -67,6 +67,16 @@ let gridX = (0..<200).map { [Double($0) / 40] }
 bench("loess batch predict x200", iterations: 5, warmup: 1) {
     _ = loessFit.predict(gridX)
 }
+// Nadaraya-Watson fit (n=100, span 0.4, 2 robust rounds) and grid.
+let nwX = (0..<100).map { [Double($0) / 20] }
+let nwY = nwX.map { sin($0[0]) }
+let nwFit = NadarayaWatson.fit(trainX: nwX, trainY: nwY, span: 0.4, robustIterations: 2)!
+bench("nw fit n=100", iterations: 5, warmup: 1) {
+    _ = NadarayaWatson.fit(trainX: nwX, trainY: nwY, span: 0.4, robustIterations: 2)
+}
+bench("nw predict x200", iterations: 5, warmup: 1) {
+    _ = nwFit.predict(gridX)
+}
 // One-call automated tuning (n=60 continuous: adaptive + 3 fixed spans).
 bench("auto tune n=60", iterations: 1, warmup: 0) {
     _ = AutomaticSmoother.fit(trainX: adaptX, trainY: adaptY, degree: 2)
