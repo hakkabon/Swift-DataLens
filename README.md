@@ -41,6 +41,11 @@ Local regression in pure Swift — `import DataLens`.
 - **Predictive flexibility:** gradients (slopes/trends) on all smoothers,
   explicit extrapolation policies (polynomial/nearest/unavailable) on every
   predict/SE path, and missing-data dropping with survivor indices.
+- **Fast adaptive grids (`predictFast` / `standardErrorsFast`):** the
+  adaptive smoother reuses each query's nearest training point's
+  AICc-selected neighborhood instead of re-selecting — ~25× faster
+  means, ~45× faster SEs on the release bench (n=60, x200 grid),
+  agreeing with the exact paths within half the noise scale.
 
 ## Requirements
 
@@ -86,7 +91,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-65 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+68 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, invalid input),
 `NearestNeighborTests` (kd-tree vs brute-force exact agreement on seeded
@@ -94,7 +99,8 @@ clouds with duplicates, coincident queries, degenerate inputs, mixed
 tree/brute paths), `SolverSeamTests` (closed-form solves plus the
 rank-deficient/singular/non-PD → nil contract on both solver paths, with
 the Linux fallback Cholesky pinned directly), `AdaptiveLoessTests` (exactness, outlier recovery, directly
-observed adaptivity that beats the best fixed span, homogeneous parity),
+observed adaptivity that beats the best fixed span, homogeneous parity,
+fast-path agreement within half the noise scale),
 `LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
 clamping, AIC span selection), `BatchTests` (batches equal pointwise

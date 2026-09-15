@@ -38,6 +38,23 @@ bench("adaptive fit n=60", iterations: 2, warmup: 0) {
     _ = AdaptiveLoess.fit(trainX: adaptX, trainY: adaptY, degree: 2,
                           robustIterations: 2)
 }
+// Adaptive grid prediction (n=60 fit, x200 grid): fresh AICc selection
+// per query vs borrowed training-point bandwidths.
+let adaptFit60 = AdaptiveLoess.fit(trainX: adaptX, trainY: adaptY, degree: 2,
+                                   robustIterations: 2)!
+let adaptGrid = (0..<200).map { [Double($0) / 200 * 6] }
+bench("adaptive exact x200", iterations: 3, warmup: 0) {
+    _ = adaptFit60.predict(adaptGrid)
+}
+bench("adaptive fast x200", iterations: 3, warmup: 0) {
+    _ = adaptFit60.predictFast(adaptGrid)
+}
+bench("adaptive SE exact x200", iterations: 3, warmup: 0) {
+    _ = adaptFit60.standardErrors(at: adaptGrid)
+}
+bench("adaptive SE fast x200", iterations: 3, warmup: 0) {
+    _ = adaptFit60.standardErrorsFast(at: adaptGrid)
+}
 // Local-binomial fit (n=80, degree 1, span 0.5; deterministic labels).
 let llX = (0..<80).map { [Double($0) / 20 - 2] }
 let llY = llX.map { sin($0[0] * 2) > 0 ? 1.0 : 0.0 }

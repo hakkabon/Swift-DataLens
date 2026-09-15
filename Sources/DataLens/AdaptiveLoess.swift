@@ -375,17 +375,18 @@ public struct AdaptiveLoess: Sendable {
     public func predict(_ x: [Double], extrapolation: ExtrapolationPolicy = .polynomial) -> Double {
         guard x.count == trainX[0].count else { return .nan }
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let box = BoundingBox(trainX)
         return AdaptiveLoess.predictAt(search: search, trainX: trainX, trainY: trainY, degree: degree,
                                        weights: weights, fittedValues: fittedValues,
                                        candidates: candidateNeighborhoods,
-                                       at: x, policy: extrapolation)
+                                       at: x, box: box, policy: extrapolation)
     }
 
     /// Shared per-point prediction kernel (single, batch, concurrent).
     static func predictAt(search: NeighborSearch, trainX: [[Double]], trainY: [Double], degree: Int,
                           weights: [Double], fittedValues: [Double], candidates: [Int],
-                          at x: [Double], policy: ExtrapolationPolicy) -> Double {
-        if !BoundingBox(trainX).contains(x) {
+                          at x: [Double], box: BoundingBox, policy: ExtrapolationPolicy) -> Double {
+        if !box.contains(x) {
             switch policy {
             case .polynomial:
                 break
@@ -417,11 +418,12 @@ public struct AdaptiveLoess: Sendable {
         let fittedValues = fittedValues
         let candidates = candidateNeighborhoods
         let policy = extrapolation
+        let box = BoundingBox(trainX)
         return xs.map { x in
             guard x.count == trainX[0].count else { return .nan }
             return AdaptiveLoess.predictAt(search: search, trainX: trainX, trainY: trainY,
                                            degree: degree, weights: weights, fittedValues: fittedValues,
-                                           candidates: candidates, at: x, policy: policy)
+                                           candidates: candidates, at: x, box: box, policy: policy)
         }
     }
 
@@ -436,12 +438,97 @@ public struct AdaptiveLoess: Sendable {
         let fittedValues = fittedValues
         let candidates = candidateNeighborhoods
         let policy = extrapolation
+        let box = BoundingBox(trainX)
         return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return .nan }
             return AdaptiveLoess.predictAt(search: search, trainX: trainX, trainY: trainY,
                                            degree: degree, weights: weights, fittedValues: fittedValues,
-                                           candidates: candidates, at: x, policy: policy)
+                                           candidates: candidates, at: x, box: box, policy: policy)
+        }
+    }
+
+    /// Fast prediction at `x`: reuse the AICc-selected neighborhood of
+    /// the nearest training point instead of re-selecting over all
+    /// candidates, then run the same robust local evaluation at `x`.
+    ///
+    /// An approximation, documented as such: on dense smooth data the
+    /// borrowed bandwidth selects (nearly) what a fresh selection
+    /// would, at roughly 1/C of the cost for C candidates. Prefer
+    /// `predict(_:)` when exactness matters (tests, publications);
+    /// prefer this for interactive grids. `.unavailable` / `.nearest`
+    /// handling mirrors `predictAt` exactly.
+    public func predictFast(_ x: [Double], extrapolation: ExtrapolationPolicy = .polynomial) -> Double {
+        guard x.count == trainX[0].count else { return .nan }
+        let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let box = BoundingBox(trainX)
+        return AdaptiveLoess.predictFastAt(search: search, trainX: trainX, trainY: trainY, degree: degree,
+                                           weights: weights, fittedValues: fittedValues,
+                                           selected: selectedNeighborhoods,
+                                           at: x, box: box, policy: extrapolation)
+    }
+
+    /// Shared fast kernel (single, batch, concurrent).
+    static func predictFastAt(search: NeighborSearch, trainX: [[Double]], trainY: [Double], degree: Int,
+                              weights: [Double], fittedValues: [Double], selected: [Int],
+                              at x: [Double], box: BoundingBox, policy: ExtrapolationPolicy) -> Double {
+        if !box.contains(x) {
+            switch policy {
+            case .polynomial:
+                break
+            case .nearest:
+                guard let j = search.nearest(to: x, count: 1).first else { return .nan }
+                return fittedValues[j]
+            case .unavailable:
+                return .nan
+            }
+        }
+        guard let j = search.nearest(to: x, count: 1).first,
+              selected.indices.contains(j) else { return .nan }
+        guard let e = evaluate(search: search, trainY: trainY, degree: degree,
+                               at: x, neighborhood: selected[j],
+                               robust: weights, track: nil) else { return .nan }
+        return e.value
+    }
+
+    /// Fast predictions over many queries (one shared neighbor index and
+    /// hull box; borrowed bandwidth per query).
+    public func predictFast(_ xs: [[Double]], extrapolation: ExtrapolationPolicy = .polynomial) -> [Double] {
+        let search = NeighborSearch(trainX: trainX)
+        let box = BoundingBox(trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        let fittedValues = fittedValues
+        let selected = selectedNeighborhoods
+        let policy = extrapolation
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return .nan }
+            return AdaptiveLoess.predictFastAt(search: search, trainX: trainX, trainY: trainY,
+                                               degree: degree, weights: weights, fittedValues: fittedValues,
+                                               selected: selected, at: x, box: box, policy: policy)
+        }
+    }
+
+    /// Concurrent fast predictions (identical to `predictFast(_:)`).
+    public func predictFastConcurrently(_ xs: [[Double]],
+                                        extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double] {
+        let search = NeighborSearch(trainX: trainX)
+        let box = BoundingBox(trainX)
+        let trainX = trainX
+        let trainY = trainY
+        let degree = degree
+        let weights = weights
+        let fittedValues = fittedValues
+        let selected = selectedNeighborhoods
+        let policy = extrapolation
+        return try await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return .nan }
+            return AdaptiveLoess.predictFastAt(search: search, trainX: trainX, trainY: trainY,
+                                               degree: degree, weights: weights, fittedValues: fittedValues,
+                                               selected: selected, at: x, box: box, policy: policy)
         }
     }
 
@@ -510,29 +597,30 @@ public struct AdaptiveLoess: Sendable {
                               extrapolation: ExtrapolationPolicy = .polynomial) -> Double? {
         guard x.count == trainX[0].count else { return nil }
         let search = NeighborSearch(trainX: trainX, forBatchUse: false)
+        let box = BoundingBox(trainX)
         return AdaptiveLoess.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
                                              degree: degree, sigma: sigma,
                                              candidates: candidateNeighborhoods,
-                                             at: x, policy: extrapolation)
+                                             at: x, box: box, policy: extrapolation)
     }
 
     /// Shared per-point SE kernel.
     static func standardErrorAt(search: NeighborSearch, trainX: [[Double]], trainY: [Double],
                                 degree: Int, sigma: Double, candidates: [Int],
-                                at x: [Double], policy: ExtrapolationPolicy) -> Double? {
+                                at x: [Double], box: BoundingBox, policy: ExtrapolationPolicy) -> Double? {
         let query: [Double]
         switch policy {
         case .polynomial:
             query = x
         case .nearest:
-            guard BoundingBox(trainX).contains(x) else {
+            guard box.contains(x) else {
                 guard let j = search.nearest(to: x, count: 1).first else { return nil }
                 query = trainX[j]
                 break
             }
             query = x
         case .unavailable:
-            guard BoundingBox(trainX).contains(x) else { return nil }
+            guard box.contains(x) else { return nil }
             query = x
         }
         let q = basisSize(degree: degree, dimensions: query.count)
@@ -552,11 +640,12 @@ public struct AdaptiveLoess: Sendable {
         let sigma = sigma
         let candidates = candidateNeighborhoods
         let policy = extrapolation
+        let box = BoundingBox(trainX)
         return xs.map { x in
             guard x.count == trainX[0].count else { return nil }
             return AdaptiveLoess.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
                                                  degree: degree, sigma: sigma,
-                                                 candidates: candidates, at: x, policy: policy)
+                                                 candidates: candidates, at: x, box: box, policy: policy)
         }
     }
 
@@ -570,12 +659,79 @@ public struct AdaptiveLoess: Sendable {
         let sigma = sigma
         let candidates = candidateNeighborhoods
         let policy = extrapolation
+        let box = BoundingBox(trainX)
         return try await concurrentMap(over: xs.count) { i in
             let x = xs[i]
             guard x.count == trainX[0].count else { return nil }
             return AdaptiveLoess.standardErrorAt(search: search, trainX: trainX, trainY: trainY,
                                                  degree: degree, sigma: sigma,
-                                                 candidates: candidates, at: x, policy: policy)
+                                                 candidates: candidates, at: x, box: box, policy: policy)
+        }
+    }
+
+    /// Shared fast-SE kernel: borrowed bandwidth, then the same
+    /// equivalent-kernel error at the query's own neighborhood.
+    static func standardErrorFastAt(search: NeighborSearch, trainX: [[Double]],
+                                    degree: Int, sigma: Double, selected: [Int],
+                                    at x: [Double], box: BoundingBox,
+                                    policy: ExtrapolationPolicy) -> Double? {
+        let query: [Double]
+        switch policy {
+        case .polynomial:
+            query = x
+        case .nearest:
+            guard box.contains(x) else {
+                guard let j = search.nearest(to: x, count: 1).first else { return nil }
+                query = trainX[j]
+                break
+            }
+            query = x
+        case .unavailable:
+            guard box.contains(x) else { return nil }
+            query = x
+        }
+        guard query.count == trainX[0].count,
+              let j = search.nearest(to: query, count: 1).first,
+              selected.indices.contains(j) else { return nil }
+        return Loess.kernelStandardError(search: search, sigma: sigma, degree: degree,
+                                         at: query, neighborhood: selected[j])
+    }
+
+    /// Fast standard errors over many queries (borrowed bandwidth per
+    /// query; same approximation contract as `predictFast(_:)`).
+    public func standardErrorsFast(at xs: [[Double]],
+                                   extrapolation: ExtrapolationPolicy = .polynomial) -> [Double?] {
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let degree = degree
+        let sigma = sigma
+        let selected = selectedNeighborhoods
+        let policy = extrapolation
+        let box = BoundingBox(trainX)
+        return xs.map { x in
+            guard x.count == trainX[0].count else { return nil }
+            return AdaptiveLoess.standardErrorFastAt(search: search, trainX: trainX,
+                                                     degree: degree, sigma: sigma,
+                                                     selected: selected, at: x, box: box, policy: policy)
+        }
+    }
+
+    /// Concurrent fast standard errors (identical to `standardErrorsFast(at:)`).
+    public func standardErrorsFastConcurrently(at xs: [[Double]],
+                                               extrapolation: ExtrapolationPolicy = .polynomial) async throws -> [Double?] {
+        let search = NeighborSearch(trainX: trainX)
+        let trainX = trainX
+        let degree = degree
+        let sigma = sigma
+        let selected = selectedNeighborhoods
+        let policy = extrapolation
+        let box = BoundingBox(trainX)
+        return try await concurrentMap(over: xs.count) { i in
+            let x = xs[i]
+            guard x.count == trainX[0].count else { return nil }
+            return AdaptiveLoess.standardErrorFastAt(search: search, trainX: trainX,
+                                                     degree: degree, sigma: sigma,
+                                                     selected: selected, at: x, box: box, policy: policy)
         }
     }
 }

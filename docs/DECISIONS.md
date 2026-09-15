@@ -282,3 +282,28 @@ cancellation-aborts (1000 trivial tasks, immediate cancel — deterministic
 by oversubscription, no timing involved) and uncancelled-completes. Note
 for the app track: scroll-driven grids should cancel superseded fits
 rather than letting them pile up behind a pinching finger.
+
+## 18. Borrowed-bandwidth fast paths for adaptive grids
+
+App-track profiling showed the adaptive smoother dominating interactive
+cost twice: full auto-tune on 1000 sine rows (~38s release) and, worse,
+every 200-point grid re-running per-point AICc selection (~16s release
+for means + SEs). Reading `predictAt`/`standardErrorAt` gave the cost
+model: per query, ~C candidates × (nearest + 2 QR fits) plus a
+`BoundingBox` rebuilt from scratch each query.
+
+The fast paths (`predictFast`, `standardErrorsFast`, each in
+single/batch/concurrent) reuse the nearest training point's already
+selected neighborhood and run the identical robust local evaluation at
+the query. On dense smooth data the borrowed bandwidth selects (nearly)
+what a fresh selection would; the release bench says ~25× on means and
+~45× on SEs (n=60, x200 grid), with agreement inside half the noise
+scale (pinned: 0.039/0.037 at seed 4245). Degenerate inputs degrade
+through the same fallback cascade, agreeing to solver noise.
+
+Deliberate boundaries: exact `predict`/`standardErrors` are untouched
+and remain the default (tests, publications); the fast variants are
+opt-in and documented as approximations. The per-query hull-box rebuild
+was hoisted in the existing batch paths too — pure motion, no numeric
+change, proven by the untouched 65-test suite going 68 green with the 3
+new agreement tests.

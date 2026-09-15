@@ -102,4 +102,70 @@ struct AdaptiveLoessTests {
         #expect(AdaptiveLoess.fit(trainX: xs15, trainY: ys15, degree: 1,
                                   neighborhoods: [2, 3]) == nil)
     }
+
+    @Test func fastPredictionAgreesWithExact() {
+        // Sine truth + seeded noise; explicit candidate grid keeps the
+        // debug suite fast while still exercising borrowed bandwidths.
+        let n = 80
+        let xs = (0..<n).map { [Double($0) / 10] }
+        var rng = SeedableRandomNumberGenerator(seed: 4245)
+        var cache = GaussianCache()
+        let ys = xs.map { sin($0[0]) + 0.1 * cache.nextStandardNormal(using: &rng) }
+        let fit = AdaptiveLoess.fit(trainX: xs, trainY: ys, degree: 2,
+                                    neighborhoods: [12, 25, 50, 80],
+                                    robustIterations: 1)!
+        let grid = (0..<100).map { [Double($0) / 100 * 7.9] }
+        let exact = fit.predict(grid)
+        let fast = fit.predictFast(grid)
+        var maxDiff = 0.0
+        for (a, b) in zip(exact, fast) {
+            #expect(a.isFinite && b.isFinite)
+            maxDiff = max(maxDiff, abs(a - b))
+        }
+        // Borrowed bandwidths stay within half the noise scale
+        // (pinned: 0.039 observed at seed 4245).
+        #expect(maxDiff <= 0.05)
+        // Batch fast equals single fast on identical bits.
+        #expect(fit.predictFast([grid[50]]) == [fast[50]])
+        // SEs agree where both are available.
+        let exactSE = fit.standardErrors(at: grid)
+        let fastSE = fit.standardErrorsFast(at: grid)
+        var maxSEDiff = 0.0
+        for (a, b) in zip(exactSE, fastSE) {
+            guard let a, let b else {
+                #expect(a == nil && b == nil)
+                continue
+            }
+            maxSEDiff = max(maxSEDiff, abs(a - b))
+        }
+        // SE agreement at the same scale (pinned: 0.037 observed).
+        #expect(maxSEDiff <= 0.05)
+    }
+
+    @Test func fastConcurrentMatchesFastBatch() async throws {
+        let n = 40
+        let xs = (0..<n).map { [Double($0) / 10] }
+        var rng = SeedableRandomNumberGenerator(seed: 4246)
+        var cache = GaussianCache()
+        let ys = xs.map { sin($0[0]) + 0.1 * cache.nextStandardNormal(using: &rng) }
+        let fit = AdaptiveLoess.fit(trainX: xs, trainY: ys, degree: 1,
+                                    neighborhoods: [8, 20, 40],
+                                    robustIterations: 0)!
+        let grid = (0..<50).map { [Double($0) / 50 * 3.9] }
+        #expect(try await fit.predictFastConcurrently(grid) == fit.predictFast(grid))
+        #expect(try await fit.standardErrorsFastConcurrently(at: grid)
+            == fit.standardErrorsFast(at: grid))
+    }
+
+    @Test func fastMatchesExactOnDuplicatedInputs() {
+        // Rank-deficient neighborhoods degrade through the same bounded
+        // fallback cascade on both paths, so they agree to solver noise.
+        let xs = [[0.0], [1.0], [1.0], [1.0], [2.0], [3.0]]
+        let ys = [0.0, 1.0, 1.5, 0.5, 2.0, 3.0]
+        let fit = AdaptiveLoess.fit(trainX: xs, trainY: ys, degree: 1)!
+        let grid = [[0.5], [1.0], [2.5]]
+        for (a, b) in zip(fit.predictFast(grid), fit.predict(grid)) {
+            #expect(abs(a - b) <= 1e-9)
+        }
+    }
 }
