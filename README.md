@@ -100,7 +100,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-78 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+79 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),

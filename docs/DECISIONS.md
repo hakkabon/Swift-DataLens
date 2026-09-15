@@ -337,6 +337,18 @@ every other rss/deviance zip in `Loess`, `AdaptiveLoess`, and
 Lesson: cross-boundary zips (caller arrays × fitted arrays) are the
 shape to grep for whenever a new dropping path is added.
 
+## 22. `FittedSmoother` carries kernel fits without routing them
+
+App track needs `NadarayaWatson` behind the uniform evaluation seam
+(`ChartModel` predicts through `FittedSmoother`), while the tuner must
+never select it (explicit-selection decision). So the enum gains a
+`nadarayaWatson` case with all 11 pass-throughs, and the two exhaustive
+switches name it: the fallback strings it defensively, and the routing
+test now pins that continuous data never arrives as kernel. Round-trip
+test proves wrapped == direct on every path. Rule going forward: new
+smoothers get a carrier case on arrival, routing only by separate
+decision.
+
 ## 21. Nadaraya–Watson as a thin wrapper over degree-0 kernels
 
 App-track feature request (old-app parity: kernel regression alongside

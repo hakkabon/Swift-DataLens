@@ -108,8 +108,7 @@ struct NadarayaWatsonTests {
         #expect(fit.fittedValues.allSatisfy { $0.isFinite })
     }
 
-    @Test func invalidInput() {
-        #expect(NadarayaWatson.fit(trainX: [], trainY: []) == nil)
+    @Test func invalidInput() {        #expect(NadarayaWatson.fit(trainX: [], trainY: []) == nil)
         #expect(NadarayaWatson.fit(trainX: [[0]], trainY: [1, 2]) == nil)
         #expect(NadarayaWatson.fit(trainX: [[0]], trainY: [1], span: 0) == nil)
         #expect(NadarayaWatson.fit(trainX: [[0]], trainY: [1], span: 1.5) == nil)
@@ -121,5 +120,25 @@ struct NadarayaWatsonTests {
         let dup = NadarayaWatson.fit(trainX: dupX, trainY: [0, 1, 1.5, 0.5, 2], span: 0.5)!
         #expect(dup.predict([[1.0]]).allSatisfy { $0.isFinite })
         #expect(dup.gradient(at: [1.0]) != nil || true)  // degenerate may be nil; must not trap
+    }
+
+    @Test func fittedSmootherCaseRoundTrips() async throws {
+        // The carrier case forwards everything identically: wrap a fit
+        // and compare every path against the direct calls.
+        var rng = SeedableRandomNumberGenerator(seed: 2406)
+        var cache = GaussianCache()
+        let xs = (0..<40).map { [Double($0) / 10] }
+        let ys = xs.map { sin($0[0]) + 0.1 * cache.nextStandardNormal(using: &rng) }
+        let direct = NadarayaWatson.fit(trainX: xs, trainY: ys, span: 0.5, robustIterations: 1)!
+        let fit = FittedSmoother.nadarayaWatson(direct)
+        let grid = (0..<20).map { [Double($0) / 5] }
+        #expect(fit.fittedValues == direct.fittedValues)
+        #expect(fit.keptIndices == direct.keptIndices)
+        #expect(fit.predict(grid) == direct.predict(grid))
+        #expect(try await fit.predictConcurrently(grid) == direct.predict(grid))
+        #expect(fit.standardErrors(at: grid) == direct.standardErrors(at: grid))
+        #expect(try await fit.standardErrorsConcurrently(at: grid) == direct.standardErrors(at: grid))
+        #expect(fit.gradients(at: grid) == direct.gradients(at: grid))
+        #expect(try await fit.gradientsConcurrently(at: grid) == direct.gradients(at: grid))
     }
 }

@@ -86,6 +86,8 @@ struct AutomaticSmootherTests {
             break
         case .likelihood:
             Issue.record("continuous data must not route to likelihood")
+        case .nadarayaWatson:
+            Issue.record("tuner never routes kernel fits; selection stays explicit")
         }
         #expect(rmse(fit.fittedValues, truthVals) < 0.2)
         #expect(summary.description.contains("GCV"))
