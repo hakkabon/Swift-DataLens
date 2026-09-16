@@ -77,6 +77,16 @@ bench("nw fit n=100", iterations: 5, warmup: 1) {
 bench("nw predict x200", iterations: 5, warmup: 1) {
     _ = nwFit.predict(gridX)
 }
+// Whittaker fit (n=100, λ=100, order 2) and grid.
+let weX = (0..<100).map { [Double($0) / 20] }
+let weY = weX.map { sin($0[0]) }
+let weFit = WhittakerEilers.fit(trainX: weX, trainY: weY, lambda: 100)!
+bench("we fit n=100", iterations: 5, warmup: 1) {
+    _ = WhittakerEilers.fit(trainX: weX, trainY: weY, lambda: 100)
+}
+bench("we predict x200", iterations: 5, warmup: 1) {
+    _ = weFit.predict(gridX)
+}
 // One-call automated tuning (n=60 continuous: adaptive + 3 fixed spans).
 bench("auto tune n=60", iterations: 1, warmup: 0) {
     _ = AutomaticSmoother.fit(trainX: adaptX, trainY: adaptY, degree: 2)

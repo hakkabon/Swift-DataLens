@@ -3,12 +3,13 @@
 Local regression in pure Swift — `import DataLens`.
 
 > Status: Cleveland-style LOESS (`Loess`, frozen), Nadaraya–Watson kernel
-> regression (`NadarayaWatson`), clean-room adaptive smoothing
-> (`AdaptiveLoess`), local likelihood (`LocalLikelihood`), batch
-> evaluation, one-call tuning, plus derivatives, explicit extrapolation,
-> and missing-data handling. Least squares via LAPACK on Apple with a
-> vendored fallback; neighbors via kd-tree or brute force. No GPL `locfit`
-> code enters this repo.
+> regression (`NadarayaWatson`), Whittaker–Eilers penalized smoothing
+> (`WhittakerEilers`, incl. Hodrick–Prescott as order 2), clean-room
+> adaptive smoothing (`AdaptiveLoess`), local likelihood
+> (`LocalLikelihood`), batch evaluation, one-call tuning, plus
+> derivatives, explicit extrapolation, and missing-data handling. Least
+> squares via LAPACK on Apple with a vendored fallback; neighbors via
+> kd-tree or brute force. No GPL `locfit` code enters this repo.
 
 ## Features
 
@@ -25,6 +26,13 @@ Local regression in pure Swift — `import DataLens`.
   `Loess.fit(degree: 0)` by construction (pinned), plus analytic
   tricube gradients. Release bench: 2.8 ms fit / 1.4 ms x200 grid
   (n=100; no QR solves anywhere).
+- **Whittaker–Eilers penalized smoothing (`WhittakerEilers`, Eilers
+  2003):** ŷ = (I + λDᵀD)⁻¹y over the x-ordered sequence (order-2 ==
+  Hodrick–Prescott), solved banded in O(n·d²) with exact trace and
+  standard errors via Takahashi — plus GCV λ selection, interpolation
+  prediction, and segment-slope gradients. Release bench: 0.5 ms fit /
+  microseconds x200 grid (n=100). Sequence semantics: x orders,
+  spacing is ignored — bin first for wild grids.
 - **Adaptive smoothing (`AdaptiveLoess`, clean-room Loader-style):**
   per-point AICc neighborhood selection (flat stretches average ~2× the
   neighborhoods of curvy ones; beats the best fixed span ~6× on
@@ -100,7 +108,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-79 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+91 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -113,7 +121,12 @@ observed adaptivity that beats the best fixed span, homogeneous parity,
 fast-path agreement within half the noise scale),
 `NadarayaWatsonTests` (constant reproduction, bit-parity with degree-0
 Loess, sine recovery, batch/concurrent agreement, analytic-vs-numeric
-gradients, missing-data masks, invalid input),`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
+gradients, missing-data masks, invalid input),
+`WhittakerEilersTests` (λ = 0 interpolation, exact lines, GCV recovery,
+batch/concurrent parity, order restoration on shuffled input,
+segment-slope gradients, missing masks, carrier round-trip, invalid
+input), `BandedSPDTests` (factor/solve/inverse vs dense references,
+verdict parity on non-SPD),`LocalLikelihoodTests` (Gaussian–Loess agreement, IRLS fixed point at
 1e-9/1e-6, Binomial/Poisson recovery with deviance below null, separation
 clamping, AIC span selection), `BatchTests` (batches equal pointwise
 calls, concurrent variants bit-identical incl. fits, cooperative

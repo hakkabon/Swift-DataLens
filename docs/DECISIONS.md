@@ -349,6 +349,26 @@ test proves wrapped == direct on every path. Rule going forward: new
 smoothers get a carrier case on arrival, routing only by separate
 decision.
 
+## 23. Whittaker–Eilers over a local band solver (Takahashi included)
+
+App-track feature request (penalized smoothing alongside LOESS/kernel).
+`ŷ = (I + λDᵀD)⁻¹y` is SPD-banded, so the fit goes through a new
+internal `BandedMatrix` (unit-Cholesky + Takahashi band-inverse) rather
+than the solve-only `LinAlg` seam, which cannot yield the trace or the
+inverse band the GCV criterion and standard errors require. The solver
+is proven element-wise against dense references (factor, solve, and
+inverse band to 1e-9; nil-verdict parity on non-SPD per #16), including
+two bugs the tests caught before review: a closed-range back-substitution
+overrun and the classic LLᵀ-vs-LDLᵀ Takahashi scaling (diagonal scale
+applies to δ only — verified by hand on 2×2 first). Exact SEs come from
+full solved rows (O(n²) fit-time, documented ~10k-row comfort zone);
+grids interpolate fitted values and SEs alike. Missing rows drop with
+`keptIndices` like every other smoother (in-system weight-0 is a
+documented follow-up); non-uniform spacing is documented, not solved
+(x orders, spacing ignored). Order-2 + chosen λ *is* the HP filter —
+no separate API blesses a λ convention this repo cannot defend on
+arbitrary x. Not auto-routed; explicit selection only, same as kernel.
+
 ## 21. Nadaraya–Watson as a thin wrapper over degree-0 kernels
 
 App-track feature request (old-app parity: kernel regression alongside
