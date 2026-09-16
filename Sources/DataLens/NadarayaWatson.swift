@@ -159,6 +159,26 @@ public struct NadarayaWatson: Sendable {
                               keptIndices: keptIndices)
     }
 
+    /// GCV score over candidate spans (uses each fit's trace).
+    public static func selectSpan(trainX: [[Double]], trainY: [Double],
+                                  spans: [Double], robustIterations: Int = 4,
+                                  droppingMissing: Bool = false) -> (span: Double, fit: NadarayaWatson)? {
+        var best: (span: Double, fit: NadarayaWatson)?
+        var bestScore = Double.infinity
+        for span in spans {
+            guard let fit = NadarayaWatson.fit(trainX: trainX, trainY: trainY, span: span,
+                                               robustIterations: robustIterations,
+                                               droppingMissing: droppingMissing) else { continue }
+            // Score on the fit's own (possibly dropped) rows (see DECISIONS #20).
+            let n = Double(fit.trainY.count)
+            let rss = zip(fit.trainY, fit.fittedValues).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
+            let denom = max(1 - fit.trace / n, 1e-6)
+            let score = (rss / n) / (denom * denom)
+            if score < bestScore { bestScore = score; best = (span, fit) }
+        }
+        return best
+    }
+
     /// Predict at `x` using the final robust weights (fallback cascade inside).
     ///
     /// `extrapolation` governs outside-hull queries (default `.polynomial`
@@ -399,25 +419,5 @@ public struct NadarayaWatson: Sendable {
             return Loess.kernelStandardError(search: search, sigma: sigma, degree: 0,
                                              at: q, neighborhood: k)
         }
-    }
-
-    /// GCV score over candidate spans (uses each fit's trace).
-    public static func selectSpan(trainX: [[Double]], trainY: [Double],
-                                  spans: [Double], robustIterations: Int = 4,
-                                  droppingMissing: Bool = false) -> (span: Double, fit: NadarayaWatson)? {
-        var best: (span: Double, fit: NadarayaWatson)?
-        var bestScore = Double.infinity
-        for span in spans {
-            guard let fit = NadarayaWatson.fit(trainX: trainX, trainY: trainY, span: span,
-                                               robustIterations: robustIterations,
-                                               droppingMissing: droppingMissing) else { continue }
-            // Score on the fit's own (possibly dropped) rows (see DECISIONS #20).
-            let n = Double(fit.trainY.count)
-            let rss = zip(fit.trainY, fit.fittedValues).reduce(0.0) { $0 + pow($1.0 - $1.1, 2) }
-            let denom = max(1 - fit.trace / n, 1e-6)
-            let score = (rss / n) / (denom * denom)
-            if score < bestScore { bestScore = score; best = (span, fit) }
-        }
-        return best
     }
 }

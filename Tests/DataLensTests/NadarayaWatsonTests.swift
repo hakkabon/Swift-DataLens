@@ -108,7 +108,7 @@ struct NadarayaWatsonTests {
         #expect(fit.fittedValues.allSatisfy { $0.isFinite })
     }
 
-    @Test func invalidInput() {        #expect(NadarayaWatson.fit(trainX: [], trainY: []) == nil)
+        @Test func invalidInput() {        #expect(NadarayaWatson.fit(trainX: [], trainY: []) == nil)
         #expect(NadarayaWatson.fit(trainX: [[0]], trainY: [1, 2]) == nil)
         #expect(NadarayaWatson.fit(trainX: [[0]], trainY: [1], span: 0) == nil)
         #expect(NadarayaWatson.fit(trainX: [[0]], trainY: [1], span: 1.5) == nil)
@@ -140,5 +140,29 @@ struct NadarayaWatsonTests {
         #expect(try await fit.standardErrorsConcurrently(at: grid) == direct.standardErrors(at: grid))
         #expect(fit.gradients(at: grid) == direct.gradients(at: grid))
         #expect(try await fit.gradientsConcurrently(at: grid) == direct.gradients(at: grid))
+    }
+
+    @Test func selectSpanPrefersSmallSpansOnCurves() {
+        // GCV over kernel-scale spans: on sine truth the winner must be
+        // narrow (wide spans flatten peaks — the failure mode that
+        // motivated selection), and the fit must track the apex.
+        var rng = SeedableRandomNumberGenerator(seed: 2407)
+        var cache = GaussianCache()
+        let xs = (0..<60).map { [Double($0) / 10] }
+        let truth = xs.map { sin($0[0]) }
+        let ys = xs.map { sin($0[0]) + 0.1 * cache.nextStandardNormal(using: &rng) }
+        let grid = [0.05, 0.1, 0.2, 0.4]
+        guard let (span, fit) = NadarayaWatson.selectSpan(
+            trainX: xs, trainY: ys, spans: grid, robustIterations: 1
+        ) else {
+            Issue.record("selectSpan returned nil")
+            return
+        }
+        #expect(grid.contains(span))
+        #expect(span <= 0.2)
+        #expect(rmse(fit.fittedValues, truth) < 0.2)
+        // Apex region (π/2 ≈ 1.57): fitted values reach near the peak.
+        let apex = zip(xs, fit.fittedValues).filter { abs($0.0[0] - 1.57) < 0.5 }.map(\.1)
+        #expect(apex.max()! > 0.8)
     }
 }
