@@ -87,6 +87,16 @@ bench("we fit n=100", iterations: 5, warmup: 1) {
 bench("we predict x200", iterations: 5, warmup: 1) {
     _ = weFit.predict(gridX)
 }
+// Total-variation fit (n=100, λ=0.5) and grid.
+let tvX = (0..<100).map { [Double($0) / 20] }
+let tvY = tvX.map { sin($0[0]) }
+let tvFit = TotalVariation.fit(trainX: tvX, trainY: tvY, lambda: 0.5)!
+bench("tv fit n=100", iterations: 5, warmup: 1) {
+    _ = TotalVariation.fit(trainX: tvX, trainY: tvY, lambda: 0.5)
+}
+bench("tv predict x200", iterations: 5, warmup: 1) {
+    _ = tvFit.predict(gridX)
+}
 // One-call automated tuning (n=60 continuous: adaptive + 3 fixed spans).
 bench("auto tune n=60", iterations: 1, warmup: 0) {
     _ = AutomaticSmoother.fit(trainX: adaptX, trainY: adaptY, degree: 2)

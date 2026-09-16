@@ -90,6 +90,8 @@ struct AutomaticSmootherTests {
             Issue.record("tuner never routes kernel fits; selection stays explicit")
         case .whittakerEilers:
             Issue.record("tuner never routes penalized fits; selection stays explicit")
+        case .totalVariation:
+            Issue.record("tuner never routes edge-preserving fits; selection stays explicit")
         }
         #expect(rmse(fit.fittedValues, truthVals) < 0.2)
         #expect(summary.description.contains("GCV"))

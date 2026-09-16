@@ -337,6 +337,24 @@ every other rss/deviance zip in `Loess`, `AdaptiveLoess`, and
 Lesson: cross-boundary zips (caller arrays × fitted arrays) are the
 shape to grep for whenever a new dropping path is added.
 
+## 21. Nadaraya–Watson as a thin wrapper over degree-0 kernels
+
+App-track feature request (old-app parity: kernel regression alongside
+LOESS). Implemented as `NadarayaWatson`, deliberately thin: every local
+evaluation delegates to `Loess.localFit` with degree 0 (identical values,
+fallback cascade, and leverage) and SEs go through
+`Loess.kernelStandardError` the same way — no duplicated math to drift.
+What the type owns: span-fraction neighborhoods (so a tuner can compare
+it against `Loess` directly), the trace/sigma bookkeeping, span
+selection scored on dropped rows (the #20 rule), and analytic tricube
+gradients including bandwidth variation (omitting dh/dx errs by O(1);
+the span neighborhood makes the mean piecewise smooth, so gradient
+tests query off-lattice points and the docs state the branch rule).
+Pinned by bit-parity with `Loess.fit(degree: 0)` — if the kernels ever
+diverge, that test names the commit. Not auto-routed in
+`AutomaticSmoother` (that would silently move every tuned fit); explicit
+selection belongs to the app track.
+
 ## 22. `FittedSmoother` carries kernel fits without routing them
 
 App track needs `NadarayaWatson` behind the uniform evaluation seam
@@ -369,20 +387,21 @@ documented follow-up); non-uniform spacing is documented, not solved
 no separate API blesses a λ convention this repo cannot defend on
 arbitrary x. Not auto-routed; explicit selection only, same as kernel.
 
-## 21. Nadaraya–Watson as a thin wrapper over degree-0 kernels
+## 24. Total variation via ADMM, verified by KKT
 
-App-track feature request (old-app parity: kernel regression alongside
-LOESS). Implemented as `NadarayaWatson`, deliberately thin: every local
-evaluation delegates to `Loess.localFit` with degree 0 (identical values,
-fallback cascade, and leverage) and SEs go through
-`Loess.kernelStandardError` the same way — no duplicated math to drift.
-What the type owns: span-fraction neighborhoods (so a tuner can compare
-it against `Loess` directly), the trace/sigma bookkeeping, span
-selection scored on dropped rows (the #20 rule), and analytic tricube
-gradients including bandwidth variation (omitting dh/dx errs by O(1);
-the span neighborhood makes the mean piecewise smooth, so gradient
-tests query off-lattice points and the docs state the branch rule).
-Pinned by bit-parity with `Loess.fit(degree: 0)` — if the kernels ever
-diverge, that test names the commit. Not auto-routed in
-`AutomaticSmoother` (that would silently move every tuned fit); explicit
-selection belongs to the app track.
+App-track request (edge-preserving complement to the smooth family).
+Implemented as 1-D fused lasso through ADMM — not the faster Condat
+direct algorithm — deliberately: ADMM is correct by construction
+(textbook Boyd splits, banded direct x-step through `BandedMatrix`),
+while a from-memory Condat risks silent wrongness that even good tests
+might shape around. Instead the tests verify OPTIMALITY directly: the
+KKT system `w = λDᵀs` makes duals a forward recurrence
+(`s[0] = −w[0]/λ`, `s[i] = s[i−1] − w[i]/λ`), so bound violations, the
+closing equation, and jump-sign agreement are all exactly checkable
+with no reference implementation — any solver wrongness fails loudly
+there. Iterative per house rules (residual stopping test, 20k cap, nil
+past it). Two more deliberate approximations, both documented on the
+type: homoskedastic σ bands (a piecewise-constant fit has no meaningful
+pointwise leverage) and segment-count trace for GCV (Tibshirani–Taylor,
+estimated under a relative jump tolerance). Not auto-routed; carrier
+case only, same as kernel and Whittaker.

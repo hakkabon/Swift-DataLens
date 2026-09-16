@@ -21,6 +21,7 @@ fit.predict([7.5]) // 14.0
 - ``LoessWeight``
 - ``NadarayaWatson``
 - ``WhittakerEilers``
+- ``TotalVariation``
 - ``AdaptiveLoess``
 - ``LocalLikelihood``
 - ``LocalLikelihoodFamily``

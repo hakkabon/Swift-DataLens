@@ -2,15 +2,16 @@ import Foundation
 
 /// A fitted smoother of unknown-ahead-of-time kind, as returned by
 /// `AutomaticSmoother` — or wrapped explicitly for uniform evaluation
-/// (`.nadarayaWatson` and `.whittakerEilers`: the tuner never produces
-/// them, keeping kernel and penalized selection explicit per the app
-/// track's decisions).
+/// (`.nadarayaWatson` and `.whittakerEilers` and `.totalVariation`:
+/// the tuner never produces them, keeping kernel, penalized, and
+/// edge-preserving selection explicit per the app track's decisions).
 public enum FittedSmoother: Sendable {
     case loess(Loess)
     case adaptive(AdaptiveLoess)
     case likelihood(LocalLikelihood)
     case nadarayaWatson(NadarayaWatson)
     case whittakerEilers(WhittakerEilers)
+    case totalVariation(TotalVariation)
 
     /// Fitted values at the training points.
     public var fittedValues: [Double] {
@@ -20,6 +21,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.fittedValues
         case .nadarayaWatson(let fit): fit.fittedValues
         case .whittakerEilers(let fit): fit.fittedValues
+        case .totalVariation(let fit): fit.fittedValues
         }
     }
 
@@ -31,6 +33,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.predict(x, extrapolation: extrapolation)
         case .nadarayaWatson(let fit): fit.predict(x, extrapolation: extrapolation)
         case .whittakerEilers(let fit): fit.predict(x, extrapolation: extrapolation)
+        case .totalVariation(let fit): fit.predict(x, extrapolation: extrapolation)
         }
     }
 
@@ -42,6 +45,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.predict(xs, extrapolation: extrapolation)
         case .nadarayaWatson(let fit): fit.predict(xs, extrapolation: extrapolation)
         case .whittakerEilers(let fit): fit.predict(xs, extrapolation: extrapolation)
+        case .totalVariation(let fit): fit.predict(xs, extrapolation: extrapolation)
         }
     }
 
@@ -54,6 +58,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
         case .nadarayaWatson(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
         case .whittakerEilers(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
+        case .totalVariation(let fit): try await fit.predictConcurrently(xs, extrapolation: extrapolation)
         }
     }
 
@@ -65,6 +70,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.gradient(at: x)
         case .nadarayaWatson(let fit): fit.gradient(at: x)
         case .whittakerEilers(let fit): fit.gradient(at: x)
+        case .totalVariation(let fit): fit.gradient(at: x)
         }
     }
 
@@ -76,6 +82,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.gradients(at: xs)
         case .nadarayaWatson(let fit): fit.gradients(at: xs)
         case .whittakerEilers(let fit): fit.gradients(at: xs)
+        case .totalVariation(let fit): fit.gradients(at: xs)
         }
     }
 
@@ -87,6 +94,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): try await fit.gradientsConcurrently(at: xs)
         case .nadarayaWatson(let fit): try await fit.gradientsConcurrently(at: xs)
         case .whittakerEilers(let fit): try await fit.gradientsConcurrently(at: xs)
+        case .totalVariation(let fit): try await fit.gradientsConcurrently(at: xs)
         }
     }
 
@@ -98,6 +106,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.keptIndices
         case .nadarayaWatson(let fit): fit.keptIndices
         case .whittakerEilers(let fit): fit.keptIndices
+        case .totalVariation(let fit): fit.keptIndices
         }
     }
 
@@ -110,6 +119,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.standardError(at: x, extrapolation: extrapolation)
         case .nadarayaWatson(let fit): fit.standardError(at: x, extrapolation: extrapolation)
         case .whittakerEilers(let fit): fit.standardError(at: x, extrapolation: extrapolation)
+        case .totalVariation(let fit): fit.standardError(at: x, extrapolation: extrapolation)
         }
     }
 
@@ -122,6 +132,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
         case .nadarayaWatson(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
         case .whittakerEilers(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
+        case .totalVariation(let fit): fit.standardErrors(at: xs, extrapolation: extrapolation)
         }
     }
 
@@ -134,6 +145,7 @@ public enum FittedSmoother: Sendable {
         case .likelihood(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
         case .nadarayaWatson(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
         case .whittakerEilers(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
+        case .totalVariation(let fit): try await fit.standardErrorsConcurrently(at: xs, extrapolation: extrapolation)
         }
     }
 }
@@ -343,6 +355,10 @@ public enum AutomaticSmoother {
             // Same: the tuner never routes penalized fits.
             smoother = "WhittakerEilers"
             reason = "Continuous responses; penalized fit selected explicitly."
+        case .totalVariation:
+            // Same: the tuner never routes edge-preserving fits.
+            smoother = "TotalVariation"
+            reason = "Continuous responses; edge-preserving fit selected explicitly."
         }
         return (fit, TuningSummary(smoother: smoother, detail: detail, score: score,
                                    reason: reason, notes: notes))
