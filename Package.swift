@@ -41,7 +41,8 @@ let package = Package(
         ),
         .testTarget(
             name: "DataLensTests",
-            dependencies: ["DataLens"]
+            dependencies: ["DataLens"],
+            resources: [.copy("Fixtures")]
         ),
         .executableTarget(
             name: "Benchmarks",

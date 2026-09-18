@@ -51,6 +51,12 @@ Local regression in pure Swift — `import DataLens`.
   Newton–IRLS with step-halving (≤25 rounds, 1e-8 tolerance), SPD systems
   through the Cholesky seam; boundary MLEs saturate finitely, deviances +
   AIC span selection, delta-method SEs.
+- **Typed diagnostics:** every `FittedSmoother` exposes serializable
+  `FitDiagnostics` (family, link, effective degrees of freedom, scale,
+  deviance) and raw, Pearson, and family-correct deviance residuals.
+- **Solver conformance contract:** the built-in fallback and
+  Swift-NumericCore run an identical checked-in fixture suite, including
+  numerical answers and singular-matrix verdicts.
 - **Batch evaluation + concurrency:** `predict(_:)` / `standardErrors(at:)`
   over query grids share one neighbor index (no per-call rebuilds);
   `*Concurrently` async variants and concurrent fits via indexed task
