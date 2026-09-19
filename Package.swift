@@ -12,10 +12,8 @@ let package = Package(
         .library(name: "DataLens", targets: ["DataLens"]),
     ],
     dependencies: [
-        // Pinned to the tagged 0.1.0 commit: `from: "0.1.0"` fails to
-        // resolve (see DECISIONS #9). Bump manually on new NumericCore tags.
         .package(url: "https://github.com/hakkabon/Swift-NumericCore.git",
-                 revision: "c9892c7fc4a76dfefd3480dead9d3ddfaeb50567"),
+                 .upToNextMinor(from: "0.3.0")),
     ],
     targets: [
         .target(
