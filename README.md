@@ -60,6 +60,15 @@ Local regression in pure Swift — `import DataLens`.
 - **Typed diagnostics:** every `FittedSmoother` exposes serializable
   `FitDiagnostics` (family, link, effective degrees of freedom, scale,
   deviance) and raw, Pearson, and family-correct deviance residuals.
+- **Unified models + validation:** `FittedStatisticalModel` presents existing
+  smoothers and Gaussian additive main-effects through one prediction,
+  gradient, residual, diagnostics, and retained-row contract. Its
+  `StatisticalModelSpecification` is serializable and feeds deterministic
+  `CrossValidation`: shuffled, source-order-blocked, or binary-stratified
+  folds, complete out-of-fold predictions, and family-appropriate scores
+  (Gaussian RMSE/MAE; binomial/Poisson mean deviance). Validation refits the
+  tuner within every training fold, so held-out rows never influence routing
+  or smoothing selection.
 - **Solver conformance contract:** the built-in fallback and
   Swift-NumericCore run an identical checked-in fixture suite, including
   numerical answers and singular-matrix verdicts.
@@ -129,7 +138,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-99 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+113 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -159,8 +168,11 @@ cancellation with abort/completion tests),
 shallow flag skips the contender with routing intact,
 fallback with a recorded note, invalid input), `FlexibilityTests`
 (derivative exactness + cosine tracking, extrapolation policies on values
-and SEs, missing-data masks with bit-identical clean fits) plus a version
-smoke test (full suite ≈ 4s in debug).
+and SEs, missing-data masks with bit-identical clean fits), and
+`UnifiedModelTests` (smoother/additive contract parity, deterministic
+shuffled/blocked/stratified validation, source-row-complete out-of-fold
+predictions, and family-appropriate scores) plus a version smoke test (full
+suite ≈ 4s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
