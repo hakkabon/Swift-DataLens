@@ -5,7 +5,7 @@ import Foundation
 /// Terms currently use one-dimensional LOESS. Keeping the predictor index in
 /// the specification permits selected-variable models and different smoothing
 /// strengths per predictor without expanding the input matrix.
-public struct AdditiveTermSpecification: Sendable, Hashable {
+public struct AdditiveTermSpecification: Codable, Sendable, Hashable {
     public let predictorIndex: Int
     public let span: Double
     public let degree: Int
@@ -15,6 +15,72 @@ public struct AdditiveTermSpecification: Sendable, Hashable {
         self.span = span
         self.degree = degree
     }
+}
+
+/// Reproducible configuration for a Gaussian additive main-effects model.
+///
+/// Supplying `terms` permits a selected-variable model with per-term smoothness;
+/// `nil` creates one term for every predictor. The remaining values mirror
+/// ``AdditiveModel/fit(trainX:trainY:terms:defaultSpan:defaultDegree:robustIterations:maxIterations:tolerance:droppingMissing:)``
+/// so a fit can be replayed by a workbench or validation run without UI state.
+public struct AdditiveModelSpecification: Codable, Sendable, Hashable {
+    public let terms: [AdditiveTermSpecification]?
+    public let defaultSpan: Double
+    public let defaultDegree: Int
+    public let robustIterations: Int
+    public let maxIterations: Int
+    public let tolerance: Double
+
+    public init(
+        terms: [AdditiveTermSpecification]? = nil,
+        defaultSpan: Double = 0.75, defaultDegree: Int = 2,
+        robustIterations: Int = 0, maxIterations: Int = 100,
+        tolerance: Double = 1e-8
+    ) {
+        self.terms = terms
+        self.defaultSpan = defaultSpan
+        self.defaultDegree = defaultDegree
+        self.robustIterations = robustIterations
+        self.maxIterations = maxIterations
+        self.tolerance = tolerance
+    }
+
+    var isValid: Bool {
+        guard defaultSpan.isFinite && defaultSpan > 0 && defaultSpan <= 1,
+              (0...2).contains(defaultDegree),
+              robustIterations >= 0, maxIterations > 0,
+              tolerance.isFinite && tolerance > 0 else { return false }
+        guard let terms else { return true }
+        return !terms.isEmpty && terms.allSatisfy {
+            $0.span.isFinite && $0.span > 0 && $0.span <= 1
+                && (0...2).contains($0.degree) && $0.predictorIndex >= 0
+        }
+    }
+}
+
+/// An interpretable summary of one fitted additive term.
+///
+/// The effect is centered over the retained training rows, so `meanEffect`
+/// is numerically close to zero and the model intercept retains its ordinary
+/// response-scale interpretation.
+public struct AdditiveTermDiagnostics: Sendable, Hashable {
+    public let predictorIndex: Int
+    public let effectiveDegreesOfFreedom: Double
+    public let meanEffect: Double
+    public let rootMeanSquareEffect: Double
+    public let minimumEffect: Double
+    public let maximumEffect: Double
+}
+
+/// A regular, centered partial-effect curve for one additive term.
+///
+/// `gradient` remains aligned with `x`; unavailable derivatives are `NaN`.
+/// This keeps a visual client from mistaking a missing derivative for zero.
+public struct AdditivePartialEffect: Sendable, Hashable {
+    public let predictorIndex: Int
+    public let x: [Double]
+    public let effect: [Double]
+    public let gradient: [Double]
 }
 
 /// A centered, fitted smooth term from an ``AdditiveModel``.
@@ -41,6 +107,41 @@ public struct AdditiveTerm: Sendable {
     public func gradient(at value: Double) -> Double? {
         smoother.gradient(at: [value])?.first
     }
+
+    /// Approximate effective degrees of freedom contributed by this centered term.
+    public var effectiveDegreesOfFreedom: Double { max(smoother.trace - 1, 0) }
+
+    /// Effect-size diagnostics on the retained rows used to fit this term.
+    public var diagnostics: AdditiveTermDiagnostics {
+        let effects = predict(smoother.trainX.map { $0[0] })
+        let n = Double(max(effects.count, 1))
+        let mean = effects.reduce(0, +) / n
+        let rms = sqrt(effects.reduce(0) { $0 + $1 * $1 } / n)
+        return AdditiveTermDiagnostics(
+            predictorIndex: specification.predictorIndex,
+            effectiveDegreesOfFreedom: effectiveDegreesOfFreedom,
+            meanEffect: mean, rootMeanSquareEffect: rms,
+            minimumEffect: effects.min() ?? .nan, maximumEffect: effects.max() ?? .nan
+        )
+    }
+
+    /// Regular partial-effect curve over this term's retained predictor hull.
+    ///
+    /// The returned effect excludes the model intercept and every other term.
+    /// It is therefore suitable for a component plot, not a response-scale
+    /// prediction plot.
+    public func partialEffect(count: Int = 100,
+                              extrapolation: ExtrapolationPolicy = .polynomial) -> AdditivePartialEffect? {
+        guard count >= 2,
+              let low = smoother.trainX.map({ $0[0] }).min(),
+              let high = smoother.trainX.map({ $0[0] }).max(), high > low else { return nil }
+        let x = (0..<count).map { low + (high - low) * Double($0) / Double(count - 1) }
+        return AdditivePartialEffect(
+            predictorIndex: specification.predictorIndex,
+            x: x, effect: predict(x, extrapolation: extrapolation),
+            gradient: x.map { gradient(at: $0) ?? .nan }
+        )
+    }
 }
 
 /// A Gaussian generalized additive model fitted by classical backfitting.
@@ -65,6 +166,19 @@ public struct AdditiveModel: Sendable {
     public let iterations: Int
     public let maximumChange: Double
     public let keptIndices: [Int]
+
+    /// Interpretable per-term effect summaries over the retained training rows.
+    public var termDiagnostics: [AdditiveTermDiagnostics] { terms.map(\.diagnostics) }
+
+    /// A component curve for the requested predictor, or `nil` when that
+    /// predictor was excluded or its observed range is degenerate.
+    public func partialEffect(
+        forPredictor predictorIndex: Int, count: Int = 100,
+        extrapolation: ExtrapolationPolicy = .polynomial
+    ) -> AdditivePartialEffect? {
+        terms.first(where: { $0.specification.predictorIndex == predictorIndex })?
+            .partialEffect(count: count, extrapolation: extrapolation)
+    }
 
     private init(trainX: [[Double]], trainY: [Double], intercept: Double,
                  terms: [AdditiveTerm], fittedValues: [Double], sigma: Double,

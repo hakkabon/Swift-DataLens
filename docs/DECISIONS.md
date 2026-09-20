@@ -428,3 +428,32 @@ intercept plus centered component traces; sigma is correspondingly approximate,
 not a joint covariance claim. Deterministic orthogonal-grid tests pin recovery,
 centering, decomposition, local-polynomial derivative recovery, whole-row
 missing-data handling, selected terms, validation, and the non-convergence verdict.
+
+## 26. Mature GAMs through the unified specification, not a second workflow
+
+The additive foundation was useful only through its direct `AdditiveModel`
+entry point: no saved/replayed model could request it, and cross-validation
+could score only automatic smoothing. Phase 7 promotes the existing Gaussian
+main-effects GAM through the same `StatisticalModelSpecification` and
+`FittedStatisticalModel` seams. A new `.additiveGaussian` strategy owns an
+`AdditiveModelSpecification` (selected terms, per-term span/degree, defaults,
+robustness, convergence cap/tolerance). The strategy is intentionally explicit
+and always Gaussian identity. In particular, integral-valued measurements do
+not silently become a Poisson GAM; likelihood GAMs require a separately
+validated IRLS/backfitting contract.
+
+`CrossValidation` now refits that full specification inside every training
+fold. Its scores remain Gaussian RMSE/MAE for this strategy, even for an
+integral response, while automatic smoothing retains its binary/count routing.
+This closes a particularly dangerous validation loophole: selecting a GAM's
+terms or smoothing settings on rows that later appear in its held-out score.
+
+Interpretability is exposed as data, not a view-only calculation.
+`AdditiveTermDiagnostics` reports centered effect magnitude and approximate
+per-term effective degrees of freedom; `AdditivePartialEffect` yields an
+aligned predictor/effect/gradient curve. These are component-scale summaries
+(not response predictions and not uncertainty intervals). The existing sigma
+and total EDF remain approximate because independent LOESS traces are not a
+joint GAM covariance calculation. Interaction terms, categorical effects,
+likelihood GAMs, and simultaneous partial-effect uncertainty remain explicit
+future work rather than silently implied by these plots.

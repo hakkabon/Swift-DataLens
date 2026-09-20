@@ -10,7 +10,7 @@ public enum ValidationPartitioning: String, Codable, Sendable, Hashable {
     case stratifiedBinary
 }
 
-/// Reproducible cross-validation settings for an automatic model.
+/// Reproducible cross-validation settings for a statistical-model specification.
 public struct ValidationConfiguration: Codable, Sendable, Hashable {
     public let foldCount: Int
     public let partitioning: ValidationPartitioning
@@ -87,11 +87,12 @@ public struct ModelValidation: Codable, Sendable, Hashable {
 
 /// Deterministic out-of-fold evaluation of ``StatisticalModelSpecification``.
 ///
-/// This is validation of the entire automatic fit, including its response
-/// routing and tuning, rather than an optimistic score for a fit whose tuning
-/// already inspected the held-out rows.
+/// This validates the entire configured fit. For automatic smoothing that
+/// includes response routing and tuning; for an additive specification it
+/// includes term selection and cyclic backfitting. In either case held-out
+/// rows never influence the model fitted for their prediction.
 public enum CrossValidation {
-    /// Evaluate an automatic statistical model with held-out predictions.
+    /// Evaluate a statistical model with held-out predictions.
     ///
     /// Returns `nil` for invalid dimensions, insufficient data, non-finite
     /// rows, an incompatible partitioning, or any fold that cannot produce a
@@ -111,7 +112,11 @@ public enum CrossValidation {
         guard finiteRows.count >= configuration.foldCount,
               let width = finiteRows.first?.1.count,
               finiteRows.allSatisfy({ $0.1.count == width }) else { return nil }
-        let family = responseFamily(for: finiteRows.map(\.2))
+        // A requested GAM is a Gaussian identity model by contract, even when
+        // its response values are integral. Automatic smoothing retains its
+        // data-driven binary/count routing.
+        let family: ResponseFamily = configuration.specification.strategy == .additiveGaussian
+            ? .gaussian : responseFamily(for: finiteRows.map(\.2))
         guard configuration.partitioning != .stratifiedBinary || family == .binomial else { return nil }
         let heldOutFolds = makeFolds(
             rows: finiteRows, foldCount: configuration.foldCount,

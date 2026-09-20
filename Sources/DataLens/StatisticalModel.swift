@@ -1,13 +1,13 @@
 import Foundation
 
-/// The fitting strategy used by a ``StatisticalModelSpecification``.
+/// The fitting strategy used by a unified statistical-model specification.
 ///
-/// The first unified contract deliberately has one strategy: the existing
-/// family-routing automatic smoother. Explicit smoothers and additive models
-/// can still be wrapped in ``FittedStatisticalModel`` without pretending that
-/// they were chosen by the automatic tuner.
+/// Automatic smoothing retains its family-routing behavior. Additive fitting
+/// is deliberately explicit and Gaussian-only: a caller never gets a
+/// likelihood GAM merely because a response happens to contain integers.
 public enum StatisticalModelStrategy: String, Codable, Sendable, Hashable {
     case automaticSmoothing
+    case additiveGaussian
 }
 
 /// Serializable configuration for a reproducible statistical fit.
@@ -21,23 +21,35 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
     public let spans: [Double]?
     public let robustIterations: Int
     public let adaptiveContender: Bool
+    /// Configuration used when `strategy` is `.additiveGaussian`.
+    /// `nil` means the default main-effects GAM over every predictor.
+    public let additive: AdditiveModelSpecification?
 
     public init(
         strategy: StatisticalModelStrategy = .automaticSmoothing,
         degree: Int = 2, spans: [Double]? = nil, robustIterations: Int = 4,
-        adaptiveContender: Bool = true
+        adaptiveContender: Bool = true,
+        additive: AdditiveModelSpecification? = nil
     ) {
         self.strategy = strategy
         self.degree = degree
         self.spans = spans
         self.robustIterations = robustIterations
         self.adaptiveContender = adaptiveContender
+        self.additive = additive
     }
 
     var isValid: Bool {
-        (0...2).contains(degree)
-            && robustIterations >= 0
-            && (spans == nil || (!(spans?.isEmpty ?? true) && spans!.allSatisfy { $0.isFinite && $0 > 0 && $0 <= 1 }))
+        switch strategy {
+        case .automaticSmoothing:
+            (0...2).contains(degree)
+                && robustIterations >= 0
+                && (spans == nil || (!(spans?.isEmpty ?? true) && spans!.allSatisfy {
+                    $0.isFinite && $0 > 0 && $0 <= 1
+                }))
+        case .additiveGaussian:
+            additive?.isValid ?? true
+        }
     }
 }
 
@@ -101,10 +113,13 @@ public struct FittedStatisticalModel: Sendable {
     }
 
     /// Wrap a converged Gaussian additive main-effects model.
-    public init(additive: AdditiveModel) {
+    public init(
+        additive: AdditiveModel,
+        specification: StatisticalModelSpecification? = nil
+    ) {
         storage = .additive(additive)
         kind = .additiveGaussian
-        specification = nil
+        self.specification = specification
         tuningSummary = nil
         trainingPredictors = additive.trainX
         trainingResponses = additive.trainY
@@ -122,9 +137,9 @@ public struct FittedStatisticalModel: Sendable {
         )
     }
 
-    /// Fit the configured automatic model and expose it through the common
-    /// contract. Missing rows are deliberately dropped so retained indices are
-    /// always meaningful to reports and validation consumers.
+    /// Fit the configured model and expose it through the common contract.
+    /// Missing rows are deliberately dropped so retained indices are always
+    /// meaningful to reports and validation consumers.
     public static func fit(
         trainX: [[Double]], trainY: [Double],
         specification: StatisticalModelSpecification = StatisticalModelSpecification()
@@ -141,6 +156,18 @@ public struct FittedStatisticalModel: Sendable {
                 smoother: result.fit, trainX: trainX, trainY: trainY,
                 specification: specification, tuningSummary: result.summary
             )
+        case .additiveGaussian:
+            let additiveSpecification = specification.additive ?? AdditiveModelSpecification()
+            guard let additive = AdditiveModel.fit(
+                trainX: trainX, trainY: trainY, terms: additiveSpecification.terms,
+                defaultSpan: additiveSpecification.defaultSpan,
+                defaultDegree: additiveSpecification.defaultDegree,
+                robustIterations: additiveSpecification.robustIterations,
+                maxIterations: additiveSpecification.maxIterations,
+                tolerance: additiveSpecification.tolerance,
+                droppingMissing: true
+            ) else { return nil }
+            return FittedStatisticalModel(additive: additive, specification: specification)
         }
     }
 
@@ -183,6 +210,35 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .smoother(let smoother): return smoother.standardError(at: x, extrapolation: extrapolation)
         case .additive: return nil
+        }
+    }
+
+    /// Interpretable summaries for fitted GAM terms.
+    ///
+    /// This is empty for smoother-backed models, so consumers that render a
+    /// generic model report can use one property without downcasting storage.
+    public var additiveTermDiagnostics: [AdditiveTermDiagnostics] {
+        switch storage {
+        case .smoother: []
+        case .additive(let additive): additive.termDiagnostics
+        }
+    }
+
+    /// Centered component curve for one GAM predictor.
+    ///
+    /// Returns `nil` for non-additive models, excluded predictors, or a
+    /// degenerate observed predictor range. The curve is a term contribution,
+    /// not a full response-scale prediction.
+    public func partialEffect(
+        forPredictor predictorIndex: Int, count: Int = 100,
+        extrapolation: ExtrapolationPolicy = .polynomial
+    ) -> AdditivePartialEffect? {
+        switch storage {
+        case .smoother: nil
+        case .additive(let additive):
+            additive.partialEffect(
+                forPredictor: predictorIndex, count: count, extrapolation: extrapolation
+            )
         }
     }
 

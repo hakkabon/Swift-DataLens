@@ -55,20 +55,26 @@ Local regression in pure Swift — `import DataLens`.
 - **Additive modeling (`AdditiveModel`):** Gaussian main-effects models
   fitted by cyclic backfitting over one-dimensional LOESS terms. Components
   are centered for an identifiable intercept, may use per-predictor span and
-  degree settings, expose component contributions and additive gradients,
-  and fail closed when the requested convergence tolerance is not reached.
+  degree settings, expose component contributions, partial-effect curves,
+  term-level effective degrees of freedom/effect sizes, and additive
+  gradients, and fail closed when the requested convergence tolerance is not
+  reached. `AdditiveModelSpecification` makes a GAM's selected terms,
+  smoothness, robustness, and convergence settings portable and replayable.
 - **Typed diagnostics:** every `FittedSmoother` exposes serializable
   `FitDiagnostics` (family, link, effective degrees of freedom, scale,
   deviance) and raw, Pearson, and family-correct deviance residuals.
 - **Unified models + validation:** `FittedStatisticalModel` presents existing
   smoothers and Gaussian additive main-effects through one prediction,
-  gradient, residual, diagnostics, and retained-row contract. Its
-  `StatisticalModelSpecification` is serializable and feeds deterministic
-  `CrossValidation`: shuffled, source-order-blocked, or binary-stratified
-  folds, complete out-of-fold predictions, and family-appropriate scores
-  (Gaussian RMSE/MAE; binomial/Poisson mean deviance). Validation refits the
-  tuner within every training fold, so held-out rows never influence routing
-  or smoothing selection.
+  gradient, residual, diagnostics, retained-row, and GAM component-summary
+  contract. Its
+  `StatisticalModelSpecification` is serializable and can select either
+  family-routing automatic smoothing or an explicit Gaussian GAM. It feeds
+  deterministic `CrossValidation`: shuffled, source-order-blocked, or
+  binary-stratified folds, complete out-of-fold predictions, and
+  family-appropriate scores (Gaussian RMSE/MAE; binomial/Poisson mean
+  deviance). Validation refits the configured tuner or GAM within every
+  training fold, so held-out rows never influence routing, smoothing, term
+  selection, or backfitting.
 - **Solver conformance contract:** the built-in fallback and
   Swift-NumericCore run an identical checked-in fixture suite, including
   numerical answers and singular-matrix verdicts.
@@ -138,7 +144,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-113 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+116 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -170,8 +176,9 @@ fallback with a recorded note, invalid input), `FlexibilityTests`
 (derivative exactness + cosine tracking, extrapolation policies on values
 and SEs, missing-data masks with bit-identical clean fits), and
 `UnifiedModelTests` (smoother/additive contract parity, deterministic
-shuffled/blocked/stratified validation, source-row-complete out-of-fold
-predictions, and family-appropriate scores) plus a version smoke test (full
+shuffled/blocked/stratified validation, reproducible GAM fitting and
+cross-validation, source-row-complete out-of-fold predictions, and
+family-appropriate scores) plus a version smoke test (full
 suite ≈ 4s in debug).
 
 ```bash

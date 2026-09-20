@@ -28,6 +28,13 @@ fit.predict([7.5]) // 14.0
 - ``AdditiveModel``
 - ``AdditiveTerm``
 - ``AdditiveTermSpecification``
+- ``AdditiveModelSpecification``
+- ``AdditiveTermDiagnostics``
+- ``AdditivePartialEffect``
+- ``FittedStatisticalModel``
+- ``StatisticalModelSpecification``
+- ``ValidationConfiguration``
+- ``CrossValidation``
 - ``AutomaticSmoother``
 - ``FittedSmoother``
 - ``TuningSummary``

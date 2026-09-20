@@ -68,6 +68,43 @@ struct AdditiveModelTests {
         #expect(gradient[1].isFinite)
     }
 
+    @Test func partialEffectsAndTermDiagnosticsAreCenteredAndAligned() {
+        let data = fixture()
+        let fit = AdditiveModel.fit(trainX: data.x, trainY: data.y,
+                                    defaultSpan: 0.45, defaultDegree: 2)!
+        let partial = fit.partialEffect(forPredictor: 1, count: 31)!
+        #expect(partial.predictorIndex == 1)
+        #expect(partial.x.count == 31)
+        #expect(partial.effect.count == partial.x.count)
+        #expect(partial.gradient.count == partial.x.count)
+        #expect(partial.x.first == -1.5)
+        #expect(partial.x.last == 1.5)
+        #expect(partial.effect.allSatisfy { $0.isFinite })
+
+        let diagnostics = fit.termDiagnostics
+        #expect(diagnostics.map(\.predictorIndex) == [0, 1])
+        #expect(diagnostics.allSatisfy { abs($0.meanEffect) < 1e-10 })
+        #expect(diagnostics.allSatisfy {
+            $0.effectiveDegreesOfFreedom >= 0 && $0.rootMeanSquareEffect > 0
+                && $0.maximumEffect > $0.minimumEffect
+        })
+        #expect(fit.partialEffect(forPredictor: 3) == nil)
+    }
+
+    @Test func additiveSpecificationIsCodableAndRejectsInvalidTermSettings() throws {
+        let specification = AdditiveModelSpecification(
+            terms: [.init(predictorIndex: 0, span: 0.4, degree: 1)],
+            defaultSpan: 0.6, defaultDegree: 2, robustIterations: 1,
+            maxIterations: 75, tolerance: 1e-7
+        )
+        let restored = try JSONDecoder().decode(
+            AdditiveModelSpecification.self, from: JSONEncoder().encode(specification)
+        )
+        #expect(restored == specification)
+        #expect(!AdditiveModelSpecification(terms: []).isValid)
+        #expect(!AdditiveModelSpecification(terms: [.init(predictorIndex: -1)]).isValid)
+    }
+
     @Test func droppingMissingIsWholeRowAndRecordsIndices() {
         let data = fixture()
         var x = data.x

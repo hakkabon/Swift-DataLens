@@ -52,6 +52,44 @@ struct UnifiedModelTests {
         #expect(model.standardError(at: [2.5, 1.5]) == nil)
     }
 
+    @Test func additiveSpecificationFitsAndValidatesThroughUnifiedContract() throws {
+        var x: [[Double]] = []
+        var y: [Double] = []
+        for first in 0..<9 {
+            for second in 0..<8 {
+                let a = -1 + Double(first) / 4
+                let b = -1 + Double(second) / 3.5
+                x.append([a, b])
+                y.append(1.25 + 1.5 * a - 0.75 * b)
+            }
+        }
+        let specification = StatisticalModelSpecification(
+            strategy: .additiveGaussian,
+            additive: .init(defaultSpan: 0.9, defaultDegree: 1,
+                            robustIterations: 0, maxIterations: 100, tolerance: 1e-9)
+        )
+        let model = try #require(FittedStatisticalModel.fit(
+            trainX: x, trainY: y, specification: specification
+        ))
+        #expect(model.kind == .additiveGaussian)
+        #expect(model.specification == specification)
+        #expect(model.tuningSummary?.smoother == nil)
+        #expect(model.diagnostics.responseFamily == .gaussian)
+        #expect(abs(model.predict([0.2, -0.3]) - 1.775) < 1e-7)
+        #expect(model.additiveTermDiagnostics.map(\.predictorIndex) == [0, 1])
+        #expect(model.partialEffect(forPredictor: 0, count: 17)?.effect.count == 17)
+
+        let validation = try #require(CrossValidation.evaluate(
+            trainX: x, trainY: y,
+            configuration: .init(foldCount: 4, partitioning: .shuffled, seed: 7,
+                                 specification: specification)
+        ))
+        #expect(validation.responseFamily == .gaussian)
+        #expect(validation.predictions.map(\.id) == Array(x.indices))
+        #expect(try #require(validation.rootMeanSquaredError) < 1e-7)
+        #expect(validation.meanDeviance == nil)
+    }
+
     @Test func shuffledValidationIsDeterministicAndOutOfFold() throws {
         let (x, y) = continuousFixture()
         let configuration = ValidationConfiguration(
