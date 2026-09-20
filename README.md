@@ -7,6 +7,7 @@ Local regression in pure Swift — `import DataLens`.
 > (`WhittakerEilers`, incl. Hodrick–Prescott as order 2), total-variation
 > denoising (`TotalVariation`, 1-D fused lasso), clean-room adaptive
 > smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`),
+> Gaussian additive main-effects models (`AdditiveModel`),
 > batch evaluation, one-call tuning, plus derivatives, explicit
 > extrapolation, and missing-data handling. Least squares via LAPACK on
 > Apple with a vendored fallback; neighbors via kd-tree or brute force.
@@ -51,6 +52,11 @@ Local regression in pure Swift — `import DataLens`.
   Newton–IRLS with step-halving (≤25 rounds, 1e-8 tolerance), SPD systems
   through the Cholesky seam; boundary MLEs saturate finitely, deviances +
   AIC span selection, delta-method SEs.
+- **Additive modeling (`AdditiveModel`):** Gaussian main-effects models
+  fitted by cyclic backfitting over one-dimensional LOESS terms. Components
+  are centered for an identifiable intercept, may use per-predictor span and
+  degree settings, expose component contributions and additive gradients,
+  and fail closed when the requested convergence tolerance is not reached.
 - **Typed diagnostics:** every `FittedSmoother` exposes serializable
   `FitDiagnostics` (family, link, effective degrees of freedom, scale,
   deviance) and raw, Pearson, and family-correct deviance residuals.

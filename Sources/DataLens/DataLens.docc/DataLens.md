@@ -25,6 +25,9 @@ fit.predict([7.5]) // 14.0
 - ``AdaptiveLoess``
 - ``LocalLikelihood``
 - ``LocalLikelihoodFamily``
+- ``AdditiveModel``
+- ``AdditiveTerm``
+- ``AdditiveTermSpecification``
 - ``AutomaticSmoother``
 - ``FittedSmoother``
 - ``TuningSummary``

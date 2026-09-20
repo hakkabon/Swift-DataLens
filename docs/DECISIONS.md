@@ -405,3 +405,26 @@ type: homoskedastic σ bands (a piecewise-constant fit has no meaningful
 pointwise leverage) and segment-count trace for GCV (Tibshirani–Taylor,
 estimated under a relative jump tolerance). Not auto-routed; carrier
 case only, same as kernel and Whittaker.
+
+## 25. Additive main effects use centered LOESS backfitting
+
+Phase 3 needs interpretable multi-predictor structure without turning the
+multivariate LOESS surface into a black box. `AdditiveModel` therefore fits
+`y = α + Σfⱼ(xⱼ)` by cyclic backfitting, reusing the frozen one-dimensional
+`Loess` implementation for every term. Each update is centered over the
+training rows; this makes α the response mean and prevents arbitrary constants
+from migrating between terms. A term specification owns predictor index, span,
+and degree, so selected-variable and heterogeneous-smoothness models need no
+second API. The first layer is deliberately Gaussian and main-effects-only:
+likelihood families, categorical effects, interactions, and joint covariance
+need explicit statistical contracts rather than silent approximations.
+
+The solver follows the repository's fail-closed iterative rule: convergence is
+maximum pointwise component change relative to response scale, capped at 100
+cycles by default, and an exhausted fit returns nil. Robust LOESS rounds are
+available but default off because linear smoothers give the clearest classical
+backfitting behavior. Effective degrees of freedom are documented as the
+intercept plus centered component traces; sigma is correspondingly approximate,
+not a joint covariance claim. Deterministic orthogonal-grid tests pin recovery,
+centering, decomposition, local-polynomial derivative recovery, whole-row
+missing-data handling, selected terms, validation, and the non-convergence verdict.
