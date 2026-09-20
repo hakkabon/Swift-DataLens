@@ -485,3 +485,46 @@ not an incidental response heuristic, and retains family-correct deviance
 metrics. The initial scope is continuous main effects with a ridge spline
 penalty; smoothing-parameter selection, tensor interactions, offsets/exposure,
 categorical terms, and covariance/interval calculations remain future work.
+
+## 28. Inference is conditional; validation evidence is paired only when it is the same task
+
+Phase 12 closes the most misleading gap in the initial likelihood GAM: its
+reported EDF was merely the number of spline coefficients, while its plots had
+no uncertainty semantics. At the converged IRLS solution we now construct
+`I = XᵀWX` and `H = I + 2λPᵀP`. The reported penalized EDF is
+`trace(H⁻¹I)` and covariance is `H⁻¹ I H⁻¹`. The factor of two agrees with the
+Phase 11 objective `½·deviance + λ‖Pβ‖²`. The SPD solve is intentionally kept
+inside Swift-DataLens's existing numeric seam: it is derived diagnostic work,
+not a new FFI surface. Failure to form finite covariance is a numerical fit
+failure, rather than a successful model with a fictional uncertainty display.
+
+Those are **conditional** observed-information intervals: the spline basis,
+penalty weight, and family are held fixed. `LikelihoodAdditiveInference`,
+mean/link standard errors, and component intervals say this explicitly. They
+do not claim to account for basis/penalty selection, nonparametric resampling,
+or simultaneous coverage. The unified model forwards this uncertainty only for
+likelihood GAMs; Gaussian LOESS backfitting remains `nil` until a genuine joint
+covariance is available, rather than borrowing an incompatible formula.
+
+Bootstrap serves the different question of fixed-workflow stability.
+`ModelResampling.bootstrap` refits the complete saved specification on samples
+drawn with replacement from the reference fit's retained rows. It is sequential
+and seedable, so the replica stream is exactly replayable. A failed fit or
+non-finite prediction is counted; percentile intervals are withheld unless the
+caller-selected success fraction is met. We deliberately ship percentile, not
+BCa, intervals: acceleration and bias correction need a separately validated
+jackknife contract. The result records attempted, successful, and failed
+replicas, preventing a UI from relabeling a small selected subset as a complete
+bootstrap.
+
+Calibration is similarly held-out only. `ModelValidation.binomialCalibration`
+uses complete out-of-fold probabilities, returns equal-frequency reliability
+bins, Brier score, and binned ECE, and declines non-binomial input. It is a
+descriptive display, not an in-sample test or a claim that an ECE bin count is
+canonical. Model-comparison panels use paired pointwise held-out loss but only
+after family, original IDs, observed responses, and fold assignments match
+exactly. Gaussian squared loss and binomial/Poisson unit deviance are never
+ranked across families; remapped folds receive a non-comparable verdict.
+`ValidationComparison` intentionally has no p-value: repeated CV dependence
+and adaptive model selection require a future, explicitly designed comparison
+procedure rather than a decorative significance star.

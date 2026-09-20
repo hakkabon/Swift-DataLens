@@ -93,7 +93,8 @@ struct LikelihoodAdditiveModelTests {
         #expect(model.kind == .additiveBinomial)
         #expect(model.diagnostics.responseFamily == .binomial)
         #expect((model.diagnostics.deviance ?? .infinity) < (model.diagnostics.nullDeviance ?? -.infinity))
-        #expect(model.standardError(at: [0]) == nil)
+        #expect(model.standardError(at: [0]) != nil)
+        #expect(model.meanConfidenceInterval(at: [0]) != nil)
 
         let validation = try #require(CrossValidation.evaluate(
             trainX: x, trainY: y,

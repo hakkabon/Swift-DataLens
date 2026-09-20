@@ -74,9 +74,10 @@ public enum StatisticalModelKind: String, Codable, Sendable, Hashable {
 ///
 /// It records retained training rows, model-family diagnostics, predictions,
 /// gradients, and documented residual definitions in one place. The wrapper
-/// does not manufacture uncertainty: additive main effects currently return
+/// does not manufacture uncertainty: Gaussian additive main effects return
 /// `nil` from ``standardError(at:extrapolation:)`` until joint uncertainty is
-/// implemented.
+/// implemented. Likelihood GAMs expose their documented conditional
+/// fixed-basis covariance through the same method.
 public struct FittedStatisticalModel: Sendable {
     private enum Storage: Sendable {
         case smoother(FittedSmoother)
@@ -252,7 +253,26 @@ public struct FittedStatisticalModel: Sendable {
     ) -> Double? {
         switch storage {
         case .smoother(let smoother): return smoother.standardError(at: x, extrapolation: extrapolation)
-        case .additive, .likelihoodAdditive: return nil
+        case .additive: return nil
+        case .likelihoodAdditive(let additive): return additive.standardError(at: x)
+        }
+    }
+
+    /// Conditional mean confidence interval where the backing model supplies one.
+    ///
+    /// Likelihood GAM intervals are normal approximations on the link scale,
+    /// conditional on their fitted spline basis and penalty. Smoother and
+    /// Gaussian additive intervals remain unavailable rather than being
+    /// silently manufactured from incompatible assumptions.
+    public func meanConfidenceInterval(
+        at x: [Double], confidenceLevel: Double = 0.95,
+        extrapolation: ExtrapolationPolicy = .polynomial
+    ) -> StatisticalInterval? {
+        switch storage {
+        case .likelihoodAdditive(let additive):
+            return additive.meanConfidenceInterval(at: x, confidenceLevel: confidenceLevel)
+        case .smoother, .additive:
+            return nil
         }
     }
 
@@ -285,6 +305,25 @@ public struct FittedStatisticalModel: Sendable {
             )
         case .likelihoodAdditive(let additive):
             additive.partialEffect(forPredictor: predictorIndex, count: count)
+        }
+    }
+
+    /// Conditional link-scale interval for a likelihood-GAM component curve.
+    ///
+    /// Returns `nil` for smoothers and Gaussian additive models because this
+    /// package does not yet have their joint component covariance. For a
+    /// likelihood GAM, the interval conditions on its fitted basis and penalty.
+    public func partialEffectInterval(
+        forPredictor predictorIndex: Int, count: Int = 100,
+        confidenceLevel: Double = 0.95
+    ) -> LikelihoodAdditivePartialEffectInterval? {
+        switch storage {
+        case .likelihoodAdditive(let additive):
+            return additive.partialEffectInterval(
+                forPredictor: predictorIndex, count: count, confidenceLevel: confidenceLevel
+            )
+        case .smoother, .additive:
+            return nil
         }
     }
 

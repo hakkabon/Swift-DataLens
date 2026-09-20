@@ -181,6 +181,8 @@ public struct LikelihoodAdditiveModel: Sendable {
     public let nullDeviance: Double
     public let penalizedObjective: Double
     public let penaltyWeight: Double
+    /// Conditional fixed-basis covariance and penalized effective degrees of freedom.
+    public let inference: LikelihoodAdditiveInference
     public let iterations: Int
     public let maximumCoefficientChange: Double
     public let scoreInfinityNorm: Double
@@ -191,7 +193,8 @@ public struct LikelihoodAdditiveModel: Sendable {
         intercept: Double, terms: [LikelihoodAdditiveTerm], fittedValues: [Double],
         linearPredictors: [Double], deviance: Double, nullDeviance: Double,
         penalizedObjective: Double, penaltyWeight: Double, iterations: Int,
-        maximumCoefficientChange: Double, scoreInfinityNorm: Double, keptIndices: [Int]
+        maximumCoefficientChange: Double, scoreInfinityNorm: Double,
+        inference: LikelihoodAdditiveInference, keptIndices: [Int]
     ) {
         self.family = family
         self.trainX = trainX
@@ -204,6 +207,7 @@ public struct LikelihoodAdditiveModel: Sendable {
         self.nullDeviance = nullDeviance
         self.penalizedObjective = penalizedObjective
         self.penaltyWeight = penaltyWeight
+        self.inference = inference
         self.iterations = iterations
         self.maximumCoefficientChange = maximumCoefficientChange
         self.scoreInfinityNorm = scoreInfinityNorm
@@ -307,6 +311,14 @@ public struct LikelihoodAdditiveModel: Sendable {
             if maximumChange <= specification.tolerance * coefficientScale && score <= scoreTolerance {
                 let linearPredictors = design.map { dot($0, coefficients) }
                 let means = linearPredictors.map { mean(eta: $0, family: family) }
+                guard let inference = makeInference(
+                    design: design, linearPredictors: linearPredictors, family: family,
+                    penaltyWeight: specification.penaltyWeight
+                ) else {
+                    return .init(status: .numericalFailure, iterations: iteration,
+                                 deviance: current.deviance, penalizedObjective: current.value,
+                                 scoreInfinityNorm: score)
+                }
                 let terms = basis.terms.enumerated().map { offset, component in
                     let range = basis.ranges[offset]
                     return LikelihoodAdditiveTerm(
@@ -322,7 +334,7 @@ public struct LikelihoodAdditiveModel: Sendable {
                     deviance: current.deviance, nullDeviance: nullDeviance(y, family: family),
                     penalizedObjective: current.value, penaltyWeight: specification.penaltyWeight,
                     iterations: iteration, maximumCoefficientChange: maximumChange,
-                    scoreInfinityNorm: score, keptIndices: cleaned.2
+                    scoreInfinityNorm: score, inference: inference, keptIndices: cleaned.2
                 )
                 return .init(status: .converged, iterations: iteration, deviance: current.deviance,
                              penalizedObjective: current.value, scoreInfinityNorm: score, model: model)
@@ -380,6 +392,83 @@ public struct LikelihoodAdditiveModel: Sendable {
         terms.first(where: { $0.specification.predictorIndex == predictorIndex })?.partialEffect(count: count)
     }
 
+    /// Conditional standard error of the linear predictor at `x`.
+    ///
+    /// This uses ``inference`` and therefore conditions on the fitted basis
+    /// and penalty. It is not a post-selection or bootstrap standard error.
+    public func linkStandardError(at x: [Double]) -> Double? {
+        guard let row = designRow(for: x),
+              let variance = InferenceMath.quadraticForm(row, covariance: inference.coefficientCovariance)
+        else { return nil }
+        return sqrt(variance)
+    }
+
+    /// Delta-method conditional standard error of the fitted response mean.
+    public func standardError(at x: [Double]) -> Double? {
+        guard let eta = linearPredictor(x), let linkError = linkStandardError(at: x) else { return nil }
+        return Self.workingPoint(eta: eta, family: family).derivative * linkError
+    }
+
+    /// Conditional normal-approximation interval for the response mean.
+    ///
+    /// The interval is formed on the link scale and transformed back to the
+    /// mean scale, preserving binomial bounds and positive Poisson means.
+    public func meanConfidenceInterval(
+        at x: [Double], confidenceLevel: Double = 0.95
+    ) -> StatisticalInterval? {
+        guard confidenceLevel.isFinite, confidenceLevel > 0, confidenceLevel < 1,
+              let eta = linearPredictor(x), let standardError = linkStandardError(at: x),
+              let z = InferenceMath.normalQuantile(0.5 + confidenceLevel / 2)
+        else { return nil }
+        let estimate = Self.mean(eta: eta, family: family)
+        let lower = Self.mean(eta: eta - z * standardError, family: family)
+        let upper = Self.mean(eta: eta + z * standardError, family: family)
+        guard estimate.isFinite, lower.isFinite, upper.isFinite else { return nil }
+        return StatisticalInterval(
+            estimate: estimate, lowerBound: lower, upperBound: upper, confidenceLevel: confidenceLevel
+        )
+    }
+
+    /// Conditional normal-approximation intervals for a centered term curve.
+    ///
+    /// Effects and bounds are on the linear-predictor scale and omit the
+    /// intercept and all other terms. They condition on the fitted basis and
+    /// penalty, exactly as ``linkStandardError(at:)`` does.
+    public func partialEffectInterval(
+        forPredictor predictorIndex: Int, count: Int = 100,
+        confidenceLevel: Double = 0.95
+    ) -> LikelihoodAdditivePartialEffectInterval? {
+        guard count >= 2, confidenceLevel.isFinite, confidenceLevel > 0, confidenceLevel < 1,
+              let termOffset = terms.firstIndex(where: { $0.specification.predictorIndex == predictorIndex }),
+              let z = InferenceMath.normalQuantile(0.5 + confidenceLevel / 2) else { return nil }
+        let term = terms[termOffset]
+        guard term.maximum > term.minimum else { return nil }
+        let values = (0..<count).map {
+            term.minimum + (term.maximum - term.minimum) * Double($0) / Double(count - 1)
+        }
+        let start = 1 + terms.prefix(termOffset).reduce(0) { $0 + $1.coefficients.count }
+        var effects: [Double] = []
+        var lowers: [Double] = []
+        var uppers: [Double] = []
+        for value in values {
+            var row = [Double](repeating: 0, count: inference.coefficientCovariance.count)
+            let basis = term.centeredBasis(value)
+            for index in basis.indices { row[start + index] = basis[index] }
+            guard let variance = InferenceMath.quadraticForm(row, covariance: inference.coefficientCovariance) else {
+                return nil
+            }
+            let effect = term.linearPredictorContribution(value)
+            let error = sqrt(variance)
+            effects.append(effect)
+            lowers.append(effect - z * error)
+            uppers.append(effect + z * error)
+        }
+        return LikelihoodAdditivePartialEffectInterval(
+            predictorIndex: predictorIndex, x: values, effect: effects,
+            lowerBounds: lowers, upperBounds: uppers, confidenceLevel: confidenceLevel
+        )
+    }
+
     /// Family-correct residuals aligned with `keptIndices`.
     public func residuals(_ kind: ResidualKind) -> [Double] {
         zip(trainY, fittedValues).map { y, mu in
@@ -404,7 +493,7 @@ public struct LikelihoodAdditiveModel: Sendable {
             responseFamily: family == .binomial ? .binomial : .poisson,
             linkFunction: family == .binomial ? .logit : .log,
             observationCount: trainY.count,
-            effectiveDegreesOfFreedom: Double(1 + terms.reduce(0) { $0 + $1.coefficients.count }),
+            effectiveDegreesOfFreedom: inference.effectiveDegreesOfFreedom,
             residualScale: 1, deviance: deviance, nullDeviance: nullDeviance
         )
     }
@@ -462,6 +551,87 @@ public struct LikelihoodAdditiveModel: Sendable {
             row[index] = 1
             return row
         }
+    }
+
+    private func designRow(for x: [Double]) -> [Double]? {
+        guard x.count == trainX[0].count, x.allSatisfy(\.isFinite) else { return nil }
+        return [1] + terms.flatMap {
+            $0.centeredBasis(x[$0.specification.predictorIndex])
+        }
+    }
+
+    private static func makeInference(
+        design: [[Double]], linearPredictors: [Double], family: LikelihoodAdditiveFamily,
+        penaltyWeight: Double
+    ) -> LikelihoodAdditiveInference? {
+        guard !design.isEmpty, design.count == linearPredictors.count,
+              let columnCount = design.first?.count, columnCount > 0,
+              design.allSatisfy({ $0.count == columnCount }) else { return nil }
+        var information = Array(
+            repeating: [Double](repeating: 0, count: columnCount), count: columnCount
+        )
+        for rowIndex in design.indices {
+            let weight = workingPoint(eta: linearPredictors[rowIndex], family: family).weight
+            guard weight.isFinite && weight > 0 else { return nil }
+            let row = design[rowIndex]
+            for left in row.indices {
+                for right in left..<row.count {
+                    information[left][right] += weight * row[left] * row[right]
+                }
+            }
+        }
+        for left in information.indices {
+            for right in 0..<left { information[left][right] = information[right][left] }
+        }
+        var penalizedInformation = information
+        for index in penalizedInformation.indices.dropFirst() {
+            penalizedInformation[index][index] += 2 * penaltyWeight
+        }
+        var inverseColumns: [[Double]] = []
+        inverseColumns.reserveCapacity(columnCount)
+        for column in 0..<columnCount {
+            var unit = [Double](repeating: 0, count: columnCount)
+            unit[column] = 1
+            guard let solution = Regression.solveSPD(penalizedInformation, unit),
+                  solution.allSatisfy(\.isFinite) else { return nil }
+            inverseColumns.append(solution)
+        }
+        let inverse = (0..<columnCount).map { row in inverseColumns.map { $0[row] } }
+        var intermediate = Array(
+            repeating: [Double](repeating: 0, count: columnCount), count: columnCount
+        )
+        for row in 0..<columnCount {
+            for column in 0..<columnCount {
+                for inner in 0..<columnCount {
+                    intermediate[row][column] += inverse[row][inner] * information[inner][column]
+                }
+            }
+        }
+        var covariance = Array(
+            repeating: [Double](repeating: 0, count: columnCount), count: columnCount
+        )
+        for row in 0..<columnCount {
+            for column in 0..<columnCount {
+                for inner in 0..<columnCount {
+                    covariance[row][column] += intermediate[row][inner] * inverse[inner][column]
+                }
+            }
+        }
+        for row in 0..<columnCount {
+            for column in 0..<row {
+                let symmetric = 0.5 * (covariance[row][column] + covariance[column][row])
+                covariance[row][column] = symmetric
+                covariance[column][row] = symmetric
+            }
+        }
+        let edf = intermediate.indices.reduce(0.0) { $0 + intermediate[$1][$1] }
+        guard covariance.flatMap({ $0 }).allSatisfy(\.isFinite), edf.isFinite,
+              edf >= 1 - 1e-8, edf <= Double(columnCount) + 1e-8 else { return nil }
+        return LikelihoodAdditiveInference(
+            covarianceMethod: .penalizedObservedInformation,
+            effectiveDegreesOfFreedom: min(max(edf, 1), Double(columnCount)),
+            coefficientCovariance: covariance
+        )
     }
 
     private static func solvePenalizedWorkingLeastSquares(

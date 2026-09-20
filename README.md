@@ -9,7 +9,8 @@ Local regression in pure Swift — `import DataLens`.
 > smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`),
 > Gaussian and penalized-likelihood additive main-effects models (`AdditiveModel`,
 > `LikelihoodAdditiveModel`),
-> batch evaluation, one-call tuning, plus derivatives, explicit
+> conditional GAM inference, calibrated out-of-fold validation, reproducible
+> bootstrap stability, guarded model comparison, batch evaluation, one-call tuning, plus derivatives, explicit
 > extrapolation, and missing-data handling. Least squares via LAPACK on
 > Apple with a vendored fallback; neighbors via kd-tree or brute force.
 > No GPL `locfit` code enters this repo.
@@ -70,6 +71,19 @@ Local regression in pure Swift — `import DataLens`.
   line-search, and iteration-limit verdicts; partial iterates are never
   exposed as fitted models. `StatisticalModelSpecification` and
   `CrossValidation` support explicit binomial and Poisson GAM strategies.
+- **Likelihood-GAM inference:** the final penalized IRLS observed information
+  yields a conditional sandwich covariance, penalized effective degrees of
+  freedom, link/mean standard errors, response-scale intervals, and
+  link-scale component intervals. These condition on the selected spline
+  basis and penalty; they are explicitly not post-selection intervals.
+- **Calibration, stability, and comparison:** `ModelValidation` produces
+  equal-frequency binary reliability bins, Brier score, and binned ECE only
+  from out-of-fold probabilities. `ModelResampling.bootstrap` deterministically
+  refits a saved workflow on nonparametric bootstrap samples and reports every
+  failed replica before exposing percentile prediction intervals. `ModelComparison`
+  permits paired loss displays only when family, held-out rows, responses, and
+  fold assignments match exactly; cross-family and remapped-fold comparisons
+  receive an explicit non-comparable verdict.
 - **Typed diagnostics:** every `FittedSmoother` exposes serializable
   `FitDiagnostics` (family, link, effective degrees of freedom, scale,
   deviance) and raw, Pearson, and family-correct deviance residuals.
@@ -155,7 +169,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-120 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+123 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -191,8 +205,10 @@ shuffled/blocked/stratified validation, reproducible GAM fitting and
 cross-validation, source-row-complete out-of-fold predictions, and
 family-appropriate scores), `LikelihoodAdditiveModelTests` (binomial and
 Poisson IRLS recovery, deviance/null invariant, score/convergence verdicts,
-and unified stratified validation) plus a version smoke test (full
-suite ≈ 4s in debug).
+and unified stratified validation), `InferenceAndValidationAnalysisTests`
+(penalized covariance/EDF and intervals, held-out calibration, guarded
+paired comparison, seeded bootstrap stability/failure verdicts) plus a version smoke test (full
+suite ≈ 20s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -216,8 +232,11 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       ├── AutomaticSmoother.swift
 │       ├── DataLens.swift
 │       ├── ExtrapolationPolicy.swift
+│       ├── LikelihoodAdditiveInference.swift
 │       ├── LikelihoodAdditiveModel.swift
 │       ├── LocalLikelihood.swift
+│       ├── ModelResampling.swift
+│       ├── ValidationAnalysis.swift
 │       ├── Loess.swift
 │       ├── Internal
 │       │   ├── Concurrency.swift (indexed task-group batch helper)
@@ -238,6 +257,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
         ├── BatchTests.swift
         ├── DataLensTests.swift
         ├── FlexibilityTests.swift
+        ├── InferenceAndValidationAnalysisTests.swift
         ├── LikelihoodAdditiveModelTests.swift
         ├── LocalLikelihoodTests.swift
         ├── LoessTests.swift
@@ -251,8 +271,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
 - Next: adaptive-bandwidth likelihood, robustness reweighting for
-  likelihood families, further families — smoothers' behavior stays frozen
-  without a DECISIONS entry.
+  likelihood families, further families, smoothing-parameter uncertainty,
+  simultaneous bands, and bootstrap BCa intervals — smoothers' behavior stays
+  frozen without a DECISIONS entry.
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,
   `swift run Benchmarks`, `swiftformat`, `swiftlint` before submitting).
