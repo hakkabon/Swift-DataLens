@@ -112,11 +112,15 @@ public enum CrossValidation {
         guard finiteRows.count >= configuration.foldCount,
               let width = finiteRows.first?.1.count,
               finiteRows.allSatisfy({ $0.1.count == width }) else { return nil }
-        // A requested GAM is a Gaussian identity model by contract, even when
-        // its response values are integral. Automatic smoothing retains its
-        // data-driven binary/count routing.
-        let family: ResponseFamily = configuration.specification.strategy == .additiveGaussian
-            ? .gaussian : responseFamily(for: finiteRows.map(\.2))
+        // Explicit GAM specifications own their response family. Automatic
+        // smoothing alone retains data-driven binary/count routing.
+        let family: ResponseFamily
+        switch configuration.specification.strategy {
+        case .additiveGaussian: family = .gaussian
+        case .additiveBinomial: family = .binomial
+        case .additivePoisson: family = .poisson
+        case .automaticSmoothing: family = responseFamily(for: finiteRows.map(\.2))
+        }
         guard configuration.partitioning != .stratifiedBinary || family == .binomial else { return nil }
         let heldOutFolds = makeFolds(
             rows: finiteRows, foldCount: configuration.foldCount,

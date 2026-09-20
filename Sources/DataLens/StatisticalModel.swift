@@ -3,11 +3,13 @@ import Foundation
 /// The fitting strategy used by a unified statistical-model specification.
 ///
 /// Automatic smoothing retains its family-routing behavior. Additive fitting
-/// is deliberately explicit and Gaussian-only: a caller never gets a
-/// likelihood GAM merely because a response happens to contain integers.
+/// is deliberately explicit: a caller never gets a likelihood GAM merely
+/// because a response happens to contain integers.
 public enum StatisticalModelStrategy: String, Codable, Sendable, Hashable {
     case automaticSmoothing
     case additiveGaussian
+    case additiveBinomial
+    case additivePoisson
 }
 
 /// Serializable configuration for a reproducible statistical fit.
@@ -24,12 +26,16 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
     /// Configuration used when `strategy` is `.additiveGaussian`.
     /// `nil` means the default main-effects GAM over every predictor.
     public let additive: AdditiveModelSpecification?
+    /// Configuration used by `.additiveBinomial` and `.additivePoisson`.
+    /// `nil` selects the default centered regression-spline basis and penalty.
+    public let likelihoodAdditive: LikelihoodAdditiveModelSpecification?
 
     public init(
         strategy: StatisticalModelStrategy = .automaticSmoothing,
         degree: Int = 2, spans: [Double]? = nil, robustIterations: Int = 4,
         adaptiveContender: Bool = true,
-        additive: AdditiveModelSpecification? = nil
+        additive: AdditiveModelSpecification? = nil,
+        likelihoodAdditive: LikelihoodAdditiveModelSpecification? = nil
     ) {
         self.strategy = strategy
         self.degree = degree
@@ -37,6 +43,7 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
         self.robustIterations = robustIterations
         self.adaptiveContender = adaptiveContender
         self.additive = additive
+        self.likelihoodAdditive = likelihoodAdditive
     }
 
     var isValid: Bool {
@@ -49,6 +56,8 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
                 }))
         case .additiveGaussian:
             additive?.isValid ?? true
+        case .additiveBinomial, .additivePoisson:
+            likelihoodAdditive?.isValid ?? true
         }
     }
 }
@@ -57,6 +66,8 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
 public enum StatisticalModelKind: String, Codable, Sendable, Hashable {
     case smoother
     case additiveGaussian
+    case additiveBinomial
+    case additivePoisson
 }
 
 /// A common fitted-model contract for smoothers and additive main-effects.
@@ -70,6 +81,7 @@ public struct FittedStatisticalModel: Sendable {
     private enum Storage: Sendable {
         case smoother(FittedSmoother)
         case additive(AdditiveModel)
+        case likelihoodAdditive(LikelihoodAdditiveModel)
     }
 
     private let storage: Storage
@@ -137,6 +149,21 @@ public struct FittedStatisticalModel: Sendable {
         )
     }
 
+    /// Wrap a converged binomial or Poisson penalized additive model.
+    public init(
+        likelihoodAdditive: LikelihoodAdditiveModel,
+        specification: StatisticalModelSpecification? = nil
+    ) {
+        storage = .likelihoodAdditive(likelihoodAdditive)
+        kind = likelihoodAdditive.family == .binomial ? .additiveBinomial : .additivePoisson
+        self.specification = specification
+        tuningSummary = nil
+        trainingPredictors = likelihoodAdditive.trainX
+        trainingResponses = likelihoodAdditive.trainY
+        keptIndices = likelihoodAdditive.keptIndices
+        diagnostics = likelihoodAdditive.diagnostics
+    }
+
     /// Fit the configured model and expose it through the common contract.
     /// Missing rows are deliberately dropped so retained indices are always
     /// meaningful to reports and validation consumers.
@@ -168,6 +195,18 @@ public struct FittedStatisticalModel: Sendable {
                 droppingMissing: true
             ) else { return nil }
             return FittedStatisticalModel(additive: additive, specification: specification)
+        case .additiveBinomial, .additivePoisson:
+            let family: LikelihoodAdditiveFamily = specification.strategy == .additiveBinomial
+                ? .binomial : .poisson
+            let likelihoodSpecification = specification.likelihoodAdditive
+                ?? LikelihoodAdditiveModelSpecification()
+            guard let additive = LikelihoodAdditiveModel.fit(
+                trainX: trainX, trainY: trainY, family: family,
+                specification: likelihoodSpecification, droppingMissing: true
+            ).model else { return nil }
+            return FittedStatisticalModel(
+                likelihoodAdditive: additive, specification: specification
+            )
         }
     }
 
@@ -176,6 +215,7 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .smoother(let smoother): smoother.fittedValues
         case .additive(let additive): additive.fittedValues
+        case .likelihoodAdditive(let additive): additive.fittedValues
         }
     }
 
@@ -184,6 +224,7 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .smoother(let smoother): smoother.predict(x, extrapolation: extrapolation)
         case .additive(let additive): additive.predict(x, extrapolation: extrapolation)
+        case .likelihoodAdditive(let additive): additive.predict(x)
         }
     }
 
@@ -192,6 +233,7 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .smoother(let smoother): smoother.predict(xs, extrapolation: extrapolation)
         case .additive(let additive): additive.predict(xs, extrapolation: extrapolation)
+        case .likelihoodAdditive(let additive): additive.predict(xs)
         }
     }
 
@@ -200,6 +242,7 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .smoother(let smoother): smoother.gradient(at: x)
         case .additive(let additive): additive.gradient(at: x)
+        case .likelihoodAdditive(let additive): additive.gradient(at: x)
         }
     }
 
@@ -209,7 +252,7 @@ public struct FittedStatisticalModel: Sendable {
     ) -> Double? {
         switch storage {
         case .smoother(let smoother): return smoother.standardError(at: x, extrapolation: extrapolation)
-        case .additive: return nil
+        case .additive, .likelihoodAdditive: return nil
         }
     }
 
@@ -221,6 +264,7 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .smoother: []
         case .additive(let additive): additive.termDiagnostics
+        case .likelihoodAdditive: []
         }
     }
 
@@ -239,6 +283,8 @@ public struct FittedStatisticalModel: Sendable {
             additive.partialEffect(
                 forPredictor: predictorIndex, count: count, extrapolation: extrapolation
             )
+        case .likelihoodAdditive(let additive):
+            additive.partialEffect(forPredictor: predictorIndex, count: count)
         }
     }
 
@@ -254,6 +300,8 @@ public struct FittedStatisticalModel: Sendable {
                 let scale = diagnostics.residualScale
                 return raw.map { scale > 0 ? $0 / scale : ($0 == 0 ? 0 : .nan) }
             }
+        case .likelihoodAdditive(let additive):
+            return additive.residuals(kind)
         }
     }
 }

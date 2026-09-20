@@ -457,3 +457,31 @@ and total EDF remain approximate because independent LOESS traces are not a
 joint GAM covariance calculation. Interaction terms, categorical effects,
 likelihood GAMs, and simultaneous partial-effect uncertainty remain explicit
 future work rather than silently implied by these plots.
+
+## 27. Likelihood GAMs use penalized IRLS with a public stop verdict
+
+Likelihood additive modeling is not Gaussian backfitting with a response
+transform. `LikelihoodAdditiveModel` therefore owns a separate,
+regression-spline construction: each selected continuous predictor contributes
+a centered cubic truncated-power basis; the intercept is unpenalized and all
+other spline coefficients receive a ridge penalty. The result is an explicit
+binomial-logit or Poisson-log main-effects GAM whose design and penalty can be
+handed directly to NumericCore's penalized weighted least-squares boundary.
+
+Each IRLS round forms the family-correct working response and weights, solves
+that penalized WLS problem, and step-halves the coefficient update until
+`½·deviance + λ‖β₋₀‖²` decreases. The WLS seam uses a sum-of-squares objective
+without the conventional one-half, so its penalty argument is `2λ`; this
+scaling is deliberate and pinned by binomial and Poisson recovery tests.
+Convergence needs both a relative coefficient-change threshold and a
+penalized-score infinity-norm threshold. `LikelihoodAdditiveFitResult` reports
+invalid input, numerical failure, line-search failure, or iteration limit, and
+only carries a model for `.converged`. This prevents callers, validation, and
+the frontend from accidentally treating a partial IRLS iterate as inference.
+
+The unified model specification adds explicit `.additiveBinomial` and
+`.additivePoisson` strategies. Cross-validation selects their declared family,
+not an incidental response heuristic, and retains family-correct deviance
+metrics. The initial scope is continuous main effects with a ridge spline
+penalty; smoothing-parameter selection, tensor interactions, offsets/exposure,
+categorical terms, and covariance/interval calculations remain future work.

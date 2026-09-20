@@ -7,7 +7,8 @@ Local regression in pure Swift — `import DataLens`.
 > (`WhittakerEilers`, incl. Hodrick–Prescott as order 2), total-variation
 > denoising (`TotalVariation`, 1-D fused lasso), clean-room adaptive
 > smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`),
-> Gaussian additive main-effects models (`AdditiveModel`),
+> Gaussian and penalized-likelihood additive main-effects models (`AdditiveModel`,
+> `LikelihoodAdditiveModel`),
 > batch evaluation, one-call tuning, plus derivatives, explicit
 > extrapolation, and missing-data handling. Least squares via LAPACK on
 > Apple with a vendored fallback; neighbors via kd-tree or brute force.
@@ -60,15 +61,25 @@ Local regression in pure Swift — `import DataLens`.
   gradients, and fail closed when the requested convergence tolerance is not
   reached. `AdditiveModelSpecification` makes a GAM's selected terms,
   smoothness, robustness, and convergence settings portable and replayable.
+- **Likelihood GAMs (`LikelihoodAdditiveModel`):** explicit binomial-logit
+  and Poisson-log penalized IRLS fits over centered cubic regression-spline
+  main effects. Every round uses NumericCore's penalized weighted
+  least-squares contract, accepts only a step-halved decrease in
+  `½·deviance + λ‖β₋₀‖²`, and verifies the penalized score before returning
+  a model. `LikelihoodAdditiveFitResult` exposes invalid-input, numerical,
+  line-search, and iteration-limit verdicts; partial iterates are never
+  exposed as fitted models. `StatisticalModelSpecification` and
+  `CrossValidation` support explicit binomial and Poisson GAM strategies.
 - **Typed diagnostics:** every `FittedSmoother` exposes serializable
   `FitDiagnostics` (family, link, effective degrees of freedom, scale,
   deviance) and raw, Pearson, and family-correct deviance residuals.
 - **Unified models + validation:** `FittedStatisticalModel` presents existing
-  smoothers and Gaussian additive main-effects through one prediction,
+  smoothers plus Gaussian, binomial, and Poisson additive main-effects through one prediction,
   gradient, residual, diagnostics, retained-row, and GAM component-summary
   contract. Its
   `StatisticalModelSpecification` is serializable and can select either
-  family-routing automatic smoothing or an explicit Gaussian GAM. It feeds
+  family-routing automatic smoothing or an explicit Gaussian, binomial, or
+  Poisson GAM. It feeds
   deterministic `CrossValidation`: shuffled, source-order-blocked, or
   binary-stratified folds, complete out-of-fold predictions, and
   family-appropriate scores (Gaussian RMSE/MAE; binomial/Poisson mean
@@ -103,7 +114,7 @@ Local regression in pure Swift — `import DataLens`.
 - Swift 6.1+ (swift-tools-version 6.1), strict concurrency enabled
 - macOS 13+ / iOS 16+ / tvOS 16+ / watchOS 9+ / macCatalyst 16+ / Linux
 - Xcode 16+ or SwiftPM CLI
-- Swift-NumericCore 0.6.x (which consumes the tagged Rust-NumericCore 0.4.0
+- Swift-NumericCore 0.7.x (which consumes the tagged Rust-NumericCore 0.5.0
   XCFramework and matching UniFFI bindings by checksum)
 
 ## Installation
@@ -144,7 +155,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-116 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+120 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -178,7 +189,9 @@ and SEs, missing-data masks with bit-identical clean fits), and
 `UnifiedModelTests` (smoother/additive contract parity, deterministic
 shuffled/blocked/stratified validation, reproducible GAM fitting and
 cross-validation, source-row-complete out-of-fold predictions, and
-family-appropriate scores) plus a version smoke test (full
+family-appropriate scores), `LikelihoodAdditiveModelTests` (binomial and
+Poisson IRLS recovery, deviance/null invariant, score/convergence verdicts,
+and unified stratified validation) plus a version smoke test (full
 suite ≈ 4s in debug).
 
 ```bash
@@ -203,6 +216,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       ├── AutomaticSmoother.swift
 │       ├── DataLens.swift
 │       ├── ExtrapolationPolicy.swift
+│       ├── LikelihoodAdditiveModel.swift
 │       ├── LocalLikelihood.swift
 │       ├── Loess.swift
 │       ├── Internal
@@ -224,6 +238,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
         ├── BatchTests.swift
         ├── DataLensTests.swift
         ├── FlexibilityTests.swift
+        ├── LikelihoodAdditiveModelTests.swift
         ├── LocalLikelihoodTests.swift
         ├── LoessTests.swift
         ├── NearestNeighborTests.swift

@@ -29,6 +29,13 @@ fit.predict([7.5]) // 14.0
 - ``AdditiveTerm``
 - ``AdditiveTermSpecification``
 - ``AdditiveModelSpecification``
+- ``LikelihoodAdditiveModel``
+- ``LikelihoodAdditiveFamily``
+- ``LikelihoodAdditiveModelSpecification``
+- ``LikelihoodAdditiveTermSpecification``
+- ``LikelihoodAdditiveTerm``
+- ``LikelihoodAdditiveFitResult``
+- ``LikelihoodAdditiveFitStatus``
 - ``AdditiveTermDiagnostics``
 - ``AdditivePartialEffect``
 - ``FittedStatisticalModel``

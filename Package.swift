@@ -12,11 +12,12 @@ let package = Package(
         .library(name: "DataLens", targets: ["DataLens"]),
     ],
     dependencies: [
-        // 0.6.0 consumes the Rust-NumericCore 0.4.0 checksummed framework.
+        // 0.7.0 consumes the Rust-NumericCore 0.5.0 checksummed framework,
+        // including the sparse statistical-solve ABI used by likelihood GAMs.
         // Keep a minor-series bound: new NumericCore behavior is opt-in here,
         // while compatible framework and binding refreshes remain resolvable.
         .package(url: "https://github.com/hakkabon/Swift-NumericCore.git",
-                 .upToNextMinor(from: "0.6.0")),
+                 .upToNextMinor(from: "0.7.0")),
     ],
     targets: [
         .target(
