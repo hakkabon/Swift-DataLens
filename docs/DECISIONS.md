@@ -116,20 +116,20 @@ Gate: 20 tests (new `solveSPD` closed-form + indefinite/zero/non-square
 nil cases) green on the Cholesky path, which also retires that file's
 unverified-marshaling caveat for these entry points.
 
-## 9. NumericCore pinned by revision, not version
+## 9. NumericCore uses semantic release ranges
 
-`from: "0.1.0"` fails to resolve with `Revision c9892c7 ... version 0.1.0
-does not match previously recorded value 6d45de7` — even though the remote
-advertises the tag correctly (`ls-remote`: 0.1.0 → c9892c7) and every
-fetch mirror on disk is correct. Proven pre-existing-data-independent via
-a scratch project, and surviving `package reset` plus global-cache clears,
-so it is not local staleness; likely a stale tag mapping on the fetch
-path (the tag may first have pointed at 6d45de7) or an SPM quirk with the
-annotated tag. Workaround: pin `revision: "c9892c7..."` (the tagged
-commit itself) — resolution, build, and all 20 tests pass. This locks
-exactly the tested code, which is what a release commit wants anyway;
-bump manually on new NumericCore tags (`swift package update` won't move a
-revision pin). Retry `from:` if the tag is ever deleted and re-pushed.
+Swift-DataLens depends on `Swift-NumericCore` with a narrow semantic
+minor-series range. Release validation resolves the first tested tag in that
+range, while the manifest permits compatible maintenance releases. This
+replaces the former revision-pin workaround, which was only needed while the
+early NumericCore tags were unstable.
+
+The current closure is `Swift-NumericCore 0.6.x`, whose `0.6.0` release pins
+the checked Rust-NumericCore `0.4.0` XCFramework and the generated UniFFI
+bindings together. DataLens deliberately uses only NumericCore's existing
+dense solver seam; portable sparse CGLS remains a lower-layer capability
+until a subsequent statistical feature explicitly adopts it. This keeps the
+release dependency truthful without exposing a partially integrated API.
 
 ## 10. Adaptive smoothing via per-observation local AICc (0.2.0)
 

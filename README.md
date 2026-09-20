@@ -103,8 +103,8 @@ Local regression in pure Swift — `import DataLens`.
 - Swift 6.1+ (swift-tools-version 6.1), strict concurrency enabled
 - macOS 13+ / iOS 16+ / tvOS 16+ / watchOS 9+ / macCatalyst 16+ / Linux
 - Xcode 16+ or SwiftPM CLI
-- Swift-NumericCore 0.3.x (which consumes the tagged Rust-NumericCore 0.3.0
-  XCFramework by checksum)
+- Swift-NumericCore 0.6.x (which consumes the tagged Rust-NumericCore 0.4.0
+  XCFramework and matching UniFFI bindings by checksum)
 
 ## Installation
 
