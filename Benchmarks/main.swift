@@ -110,3 +110,30 @@ bench("auto tune shallow n=60", iterations: 1, warmup: 0) {
 bench("loess gradient x200", iterations: 5, warmup: 1) {
     _ = loessFit.gradients(at: gridX)
 }
+
+// Large sparse statistical workload: four treatment-coded factors create
+// 253 coefficients but at most four non-intercept entries per row. This is the
+// representative geometry for workbench filters/segment comparisons, where a
+// sparse CGLS bridge can beat materializing a dense augmented QR design.
+let factorLevels = 64
+let factorRows = 12_000
+let factorX = (0..<factorRows).map { row in
+    (0..<4).map { factor in Double((row / (factor + 1) + factor * 17) % factorLevels) }
+}
+let factorY = factorX.map { row in
+    1 + 0.2 * row[0] / 63 - 0.15 * row[1] / 63 + 0.1 * row[2] / 63 - 0.05 * row[3] / 63
+}
+let factorSpecification = MultivariateModelSpecification(
+    terms: (0..<4).map {
+        .categorical(CategoricalTermSpecification(
+            predictorIndex: $0, levels: Array(0..<factorLevels), referenceLevel: 0
+        ))
+    },
+    penaltyWeight: 0.1, maxIterations: 40, tolerance: 1e-8
+)
+bench("multivariate factors n=12000", iterations: 1, warmup: 0) {
+    _ = MultivariateModel.fit(
+        trainX: factorX, trainY: factorY, family: .gaussian,
+        specification: factorSpecification
+    )
+}

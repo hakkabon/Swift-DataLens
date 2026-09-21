@@ -36,6 +36,13 @@ let package = Package(
                     package: "Swift-NumericCore",
                     condition: .when(platforms: [.macOS, .iOS, .macCatalyst, .tvOS, .watchOS, .visionOS])
                 ),
+                // Portable CSR CGLS is selected only for profiled sparse
+                // multivariate workloads; dense QR remains the small/dense path.
+                .product(
+                    name: "NumericCoreSparse",
+                    package: "Swift-NumericCore",
+                    condition: .when(platforms: [.macOS, .iOS, .macCatalyst, .tvOS, .watchOS, .visionOS])
+                ),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

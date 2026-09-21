@@ -2,6 +2,9 @@ import Foundation
 #if canImport(NumericCoreAccelerate)
 import NumericCoreAccelerate
 #endif
+#if canImport(NumericCoreSparse)
+import NumericCoreSparse
+#endif
 
 /// Response family supported by ``MultivariateModel``.
 public enum MultivariateResponseFamily: String, Codable, Sendable, Hashable {
@@ -16,6 +19,25 @@ public enum MultivariateResponseFamily: String, Codable, Sendable, Hashable {
         case .poisson: .poisson
         }
     }
+}
+
+/// Requested numerical path for a multivariate penalized least-squares update.
+public enum MultivariateSolverPreference: String, Codable, Sendable, Hashable {
+    /// Use sparse CGLS only for profiled, sufficiently sparse large designs.
+    case automatic
+    /// Always use the rank-revealing dense augmented-QR path.
+    case denseQR
+    /// Require the portable CSR CGLS path; a non-converged sparse solve fails closed.
+    case sparseCGLS
+}
+
+/// Numerical backend actually used by a converged multivariate fit.
+public enum MultivariateSolverBackend: String, Codable, Sendable, Hashable {
+    case denseQR
+    /// Rust-NumericCore CSR CGLS through Swift-NumericCore's sparse bridge.
+    case sparseCGLS
+    /// Automatic sparse dispatch did not converge, so dense QR supplied the checked fit.
+    case denseQRFallback
 }
 
 /// One continuous univariate regression-spline main effect.
@@ -98,6 +120,8 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
     public let defaultKnotCount: Int
     /// Ridge penalty applied to every non-intercept coefficient.
     public let penaltyWeight: Double
+    /// Numerical path selection; `.automatic` preserves dense QR except for profiled sparse designs.
+    public let solverPreference: MultivariateSolverPreference
     public let maxIterations: Int
     public let tolerance: Double
 
@@ -105,14 +129,45 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
         terms: [MultivariateTermSpecification]? = nil,
         spatialTemporal: SpatialTemporalWorkflowSpecification? = nil,
         defaultKnotCount: Int = 3, penaltyWeight: Double = 1,
+        solverPreference: MultivariateSolverPreference = .automatic,
         maxIterations: Int = 50, tolerance: Double = 1e-8
     ) {
         self.terms = terms
         self.spatialTemporal = spatialTemporal
         self.defaultKnotCount = defaultKnotCount
         self.penaltyWeight = penaltyWeight
+        self.solverPreference = solverPreference
         self.maxIterations = maxIterations
         self.tolerance = tolerance
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case terms, spatialTemporal, defaultKnotCount, penaltyWeight
+        case solverPreference, maxIterations, tolerance
+    }
+
+    /// Decodes Phase 13 saved specifications with `.automatic` acceleration,
+    /// preserving replayability after the Phase 14 field was introduced.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        terms = try values.decodeIfPresent([MultivariateTermSpecification].self, forKey: .terms)
+        spatialTemporal = try values.decodeIfPresent(SpatialTemporalWorkflowSpecification.self, forKey: .spatialTemporal)
+        defaultKnotCount = try values.decode(Int.self, forKey: .defaultKnotCount)
+        penaltyWeight = try values.decode(Double.self, forKey: .penaltyWeight)
+        solverPreference = try values.decodeIfPresent(MultivariateSolverPreference.self, forKey: .solverPreference) ?? .automatic
+        maxIterations = try values.decode(Int.self, forKey: .maxIterations)
+        tolerance = try values.decode(Double.self, forKey: .tolerance)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(terms, forKey: .terms)
+        try values.encodeIfPresent(spatialTemporal, forKey: .spatialTemporal)
+        try values.encode(defaultKnotCount, forKey: .defaultKnotCount)
+        try values.encode(penaltyWeight, forKey: .penaltyWeight)
+        try values.encode(solverPreference, forKey: .solverPreference)
+        try values.encode(maxIterations, forKey: .maxIterations)
+        try values.encode(tolerance, forKey: .tolerance)
     }
 
     var isValid: Bool {
@@ -213,7 +268,7 @@ public struct MultivariateTerm: Sendable {
         coefficientCount = coefficients.count
     }
 
-    /// Centered contribution to the linear predictor, or `nil` for an invalid row/category.
+    /// Contribution to the linear predictor, or `nil` for an invalid row/category.
     public func linearPredictorContribution(at x: [Double]) -> Double? {
         basis.values(at: x).map { MultivariateModel.dot($0, coefficients) }
     }
@@ -299,13 +354,13 @@ private struct CategoricalBasis: Sendable {
     let predictorIndex: Int
     let levels: [Int]
     let referenceLevel: Int
-    let means: [Double]
 
     func centeredValues(at x: [Double]) -> [Double]? {
         guard x.indices.contains(predictorIndex), x[predictorIndex].isFinite,
               let code = exactInteger(x[predictorIndex]), levels.contains(code) else { return nil }
-        let raw = levels.filter { $0 != referenceLevel }.map { $0 == code ? 1.0 : 0.0 }
-        return zip(raw, means).map(-)
+        // Treatment coding is deliberately uncentered: the intercept is the
+        // reference-level value and rows retain a truly sparse representation.
+        return levels.filter { $0 != referenceLevel }.map { $0 == code ? 1.0 : 0.0 }
     }
 
     private func exactInteger(_ value: Double) -> Int? {
@@ -406,6 +461,8 @@ public struct MultivariateModel: Sendable {
     public let nullDeviance: Double
     public let penalizedObjective: Double
     public let penaltyWeight: Double
+    /// Numerical solve backend used for the final accepted update.
+    public let solverBackend: MultivariateSolverBackend
     public let inference: MultivariateInference
     public let residualScale: Double
     public let iterations: Int
@@ -417,7 +474,8 @@ public struct MultivariateModel: Sendable {
         intercept: Double, terms: [MultivariateTerm], fittedValues: [Double],
         linearPredictors: [Double], deviance: Double, nullDeviance: Double,
         penalizedObjective: Double, penaltyWeight: Double, inference: MultivariateInference,
-        residualScale: Double, iterations: Int, scoreInfinityNorm: Double, keptIndices: [Int]
+        solverBackend: MultivariateSolverBackend, residualScale: Double, iterations: Int,
+        scoreInfinityNorm: Double, keptIndices: [Int]
     ) {
         self.family = family
         self.trainX = trainX
@@ -430,6 +488,7 @@ public struct MultivariateModel: Sendable {
         self.nullDeviance = nullDeviance
         self.penalizedObjective = penalizedObjective
         self.penaltyWeight = penaltyWeight
+        self.solverBackend = solverBackend
         self.inference = inference
         self.residualScale = residualScale
         self.iterations = iterations
@@ -476,13 +535,16 @@ public struct MultivariateModel: Sendable {
             let weights = working.map(\.weight)
             let response = eta.indices.map { eta[$0] + (y[$0] - working[$0].mean) / working[$0].derivative }
             guard weights.allSatisfy({ $0.isFinite && $0 > 0 }), response.allSatisfy(\.isFinite),
-                  let proposal = solvePenalizedWeightedLeastSquares(
+                  let solve = solvePenalizedWeightedLeastSquares(
                     design: design, response: response, weights: weights, penalty: penalty,
-                    penaltyWeight: 2 * specification.penaltyWeight
+                    penaltyWeight: 2 * specification.penaltyWeight,
+                    preference: specification.solverPreference,
+                    tolerance: specification.tolerance
                   ) else {
                 return .init(status: .numericalFailure, iterations: iteration - 1,
                              deviance: current.deviance, penalizedObjective: current.value)
             }
+            let proposal = solve.coefficients
             var step = 1.0
             var accepted: (coefficients: [Double], objective: Objective)?
             for _ in 0..<20 {
@@ -550,7 +612,8 @@ public struct MultivariateModel: Sendable {
                     fittedValues: fitted, linearPredictors: linearPredictors,
                     deviance: current.deviance, nullDeviance: nullDeviance(y, family: family),
                     penalizedObjective: current.value, penaltyWeight: specification.penaltyWeight,
-                    inference: inference, residualScale: residualScale, iterations: iteration,
+                    inference: inference, solverBackend: solve.backend,
+                    residualScale: residualScale, iterations: iteration,
                     scoreInfinityNorm: score, keptIndices: cleaned.2
                 )
                 return .init(status: .converged, iterations: iteration, deviance: current.deviance,
@@ -796,10 +859,8 @@ public struct MultivariateModel: Sendable {
               codes.allSatisfy(levels.contains) else { return nil }
         let reference = specification.referenceLevel ?? levels[0]
         guard levels.contains(reference) else { return nil }
-        let raw = codes.map { code in levels.filter { $0 != reference }.map { $0 == code ? 1.0 : 0.0 } }
-        let means = raw[0].indices.map { index in raw.map { $0[index] }.reduce(0, +) / Double(rows.count) }
         return CategoricalBasis(
-            predictorIndex: specification.predictorIndex, levels: levels, referenceLevel: reference, means: means
+            predictorIndex: specification.predictorIndex, levels: levels, referenceLevel: reference
         )
     }
 
@@ -910,13 +971,34 @@ public struct MultivariateModel: Sendable {
     }
 
     private static func solvePenalizedWeightedLeastSquares(
-        design: [[Double]], response: [Double], weights: [Double], penalty: [[Double]], penaltyWeight: Double
-    ) -> [Double]? {
+        design: [[Double]], response: [Double], weights: [Double], penalty: [[Double]], penaltyWeight: Double,
+        preference: MultivariateSolverPreference, tolerance: Double
+    ) -> (coefficients: [Double], backend: MultivariateSolverBackend)? {
+        let sparseRequested: Bool
+        switch preference {
+        case .automatic: sparseRequested = sparseGeometryIsWorthwhile(design)
+        case .denseQR: sparseRequested = false
+        case .sparseCGLS: sparseRequested = true
+        }
+        if sparseRequested {
+            #if canImport(NumericCoreSparse)
+            if let sparse = sparsePenalizedSolve(
+                design: design, response: response, weights: weights, penaltyWeight: penaltyWeight,
+                tolerance: tolerance
+            ) {
+                return (sparse, .sparseCGLS)
+            }
+            guard preference == .automatic else { return nil }
+            #else
+            guard preference == .automatic else { return nil }
+            #endif
+        }
         #if canImport(NumericCoreAccelerate)
-        return StatisticalSolver.penalizedWeightedLeastSquares(
+        guard let coefficients = StatisticalSolver.penalizedWeightedLeastSquares(
             design: design, response: response, weights: weights,
             penaltyRows: penalty, penaltyWeight: penaltyWeight
-        )?.coefficients
+        )?.coefficients else { return nil }
+        return (coefficients, sparseRequested ? .denseQRFallback : .denseQR)
         #else
         var augmented: [[Double]] = []
         var augmentedResponse: [Double] = []
@@ -930,9 +1012,79 @@ public struct MultivariateModel: Sendable {
             augmented.append(row.map { penaltyScale * $0 })
             augmentedResponse.append(0)
         }
-        return LinAlg.leastSquares(design: augmented, response: augmentedResponse)
+        guard let coefficients = LinAlg.leastSquares(design: augmented, response: augmentedResponse) else {
+            return nil
+        }
+        return (coefficients, sparseRequested ? .denseQRFallback : .denseQR)
         #endif
     }
+
+    /// Phase 14 dispatch rule, calibrated against the release benchmark's
+    /// n=12,000/p=253 categorical workload. Dense QR remains faster and more
+    /// accurate for compact or substantially dense spline designs.
+    private static func sparseGeometryIsWorthwhile(_ design: [[Double]]) -> Bool {
+        guard let columnCount = design.first?.count, columnCount > 0,
+              design.count * columnCount >= 250_000 else { return false }
+        // QR grows with both row count and the square of the 253-column factor
+        // design; past this point low-density factor models consistently favor
+        // the portable CGLS path in the release workload.
+        let nonzeros = design.reduce(0) { count, row in
+            count + row.reduce(0) { $0 + ($1 == 0 ? 0 : 1) }
+        }
+        return Double(nonzeros) / Double(design.count * columnCount) <= 0.12
+    }
+
+    #if canImport(NumericCoreSparse)
+    private static func sparsePenalizedSolve(
+        design: [[Double]], response: [Double], weights: [Double], penaltyWeight: Double,
+        tolerance: Double
+    ) -> [Double]? {
+        guard let sparseDesign = csrMatrix(design),
+              let sparsePenalty = identityPenalty(columnCount: design[0].count) else { return nil }
+        do {
+            let result = try SparseStatisticalSolver.penalizedWeightedLeastSquares(
+                design: sparseDesign, response: response, weights: weights, penalty: sparsePenalty,
+                penaltyWeight: penaltyWeight,
+                maxIterations: max(1_000, min(10_000, design[0].count * 20)),
+                tolerance: min(tolerance, 1e-10)
+            )
+            guard result.converged, result.coefficients.count == design[0].count,
+                  result.coefficients.allSatisfy(\.isFinite) else { return nil }
+            return result.coefficients
+        } catch {
+            return nil
+        }
+    }
+
+    private static func csrMatrix(_ dense: [[Double]]) -> SparseMatrix<Double>? {
+        guard let columnCount = dense.first?.count, columnCount > 0,
+              dense.allSatisfy({ $0.count == columnCount }) else { return nil }
+        var rowPointers = [0]
+        var columnIndices: [Int] = []
+        var values: [Double] = []
+        for row in dense {
+            for column in row.indices where row[column] != 0 {
+                columnIndices.append(column)
+                values.append(row[column])
+            }
+            rowPointers.append(values.count)
+        }
+        return try? SparseMatrix(
+            rows: dense.count, cols: columnCount, rowPointers: rowPointers,
+            columnIndices: columnIndices, values: values
+        )
+    }
+
+    private static func identityPenalty(columnCount: Int) -> SparseMatrix<Double>? {
+        guard columnCount > 1 else { return nil }
+        let columns = Array(1..<columnCount)
+        return try? SparseMatrix(
+            rows: columnCount - 1, cols: columnCount,
+            rowPointers: Array(0..<columnCount), columnIndices: columns,
+            values: [Double](repeating: 1, count: columnCount - 1)
+        )
+    }
+    #endif
 
     private static func makeInference(
         design: [[Double]], linearPredictors: [Double], family: MultivariateResponseFamily,

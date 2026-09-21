@@ -534,8 +534,8 @@ procedure rather than a decorative significance star.
 Phase 13 adds `MultivariateModel` rather than extending either the Gaussian
 LOESS backfitter or the one-dimensional likelihood GAM past their stated
 contracts. Its design matrix is composed from centered cubic truncated-power
-main-effect bases, tensor products of two continuous bases, and centered
-treatment-coded categorical indicators. A standalone tensor is deliberately
+main-effect bases, tensor products of two continuous bases, and treatment-coded
+categorical indicators. A standalone tensor is deliberately
 an **interaction-only** term: callers add main effects when that is the
 scientific model. This avoids silently changing an interaction request into a
 full surface. `SpatialTemporalWorkflowSpecification` is the one semantic
@@ -570,3 +570,44 @@ ordering is likewise not guessed: users select blocked cross-validation when
 their source order is a forecasting boundary. This keeps a spatial map and a
 time-series forecast from receiving the same unjustified exchangeability
 assumption.
+
+## 30. Sparse factor workloads use a profiled portable CGLS bridge before any GPU work
+
+Phase 14 began with a release-mode workload representative of workbench
+segment/filter comparisons: 12,000 rows, four 64-level treatment-coded factors,
+253 total coefficients, and at most five nonzero design entries per row
+including the intercept. The former dense augmented-QR solve took 12.22 seconds on the
+checked development host; routing its penalized WLS updates through
+Swift-NumericCore's Rust-NumericCore CSR CGLS bridge reduced the same run to
+9.37 seconds (about 23%). This is a workload-specific measurement, not a
+cross-machine performance promise.
+
+`MultivariateModelSpecification.solverPreference` is serializable and defaults
+to `.automatic`; specifications saved before the field existed decode with that
+default. Automatic dispatch requires at least 250,000 design cells and no more
+than 12% stored nonzeros, so compact or dense spline/tensor designs retain the
+rank-revealing QR path. Clients can explicitly request `.denseQR` or
+`.sparseCGLS`; CGLS reports convergence through NumericCore and an explicit
+sparse request fails closed on a bridge, numerical, or convergence failure.
+Only automatic dispatch may fall back to QR. The converged model records a
+`solverBackend`, ensuring saved analyses and UI diagnostics do not falsely
+attribute a fit to a backend that was not used.
+
+Treatment factors are deliberately uncentered in this phase: the intercept is
+the declared reference-level mean and each non-reference factor row is a true
+sparse indicator. This preserves the familiar factor interpretation and makes
+the sparse geometry real rather than merely an export-time compression. It can
+produce slightly different ridge-penalized coefficients than the Phase 13
+centered parameterization; callers who require an exact historical replay must
+retain the historical model result, not refit its specification under a new
+release.
+
+Metal is intentionally not introduced here. The profiled bottleneck was a
+low-density sparse statistical solve, where GPU transfer, shader maintenance,
+and platform divergence would not address the dominant structure. The current
+workflow still materializes a dense basis, score, and conditional covariance;
+the next numerical increment is therefore sparse basis/score storage plus
+preconditioned or factorization-backed inference, followed by a fresh profile
+of repeated dense surface or point-cloud rendering workloads. GPU work becomes
+appropriate only if that profile shows sustained dense parallel work that is
+not better served by the portable CPU sparse path.

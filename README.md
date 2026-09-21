@@ -88,6 +88,15 @@ Local regression in pure Swift — `import DataLens`.
   grids and deterministic marching-squares segments for native map/contour
   views. Blocked cross-validation remains the explicit choice for temporal
   forecasting boundaries.
+- **Profile-led sparse solves:** large, low-density multivariate factor
+  designs automatically use Rust-NumericCore's portable CSR CGLS bridge;
+  compact and dense designs retain rank-revealing QR. Set
+  `MultivariateSolverPreference` to require either route, and inspect
+  `MultivariateModel.solverBackend` to record the route actually used.
+  The representative 12,000-row/253-coefficient factor benchmark fell from
+  12.22 s to 9.37 s in the checked release run. Sparse non-convergence falls
+  back to QR only under `.automatic`; an explicit `.sparseCGLS` request fails
+  closed.
 - **Calibration, stability, and comparison:** `ModelValidation` produces
   equal-frequency binary reliability bins, Brier score, and binned ECE only
   from out-of-fold probabilities. `ModelResampling.bootstrap` deterministically
@@ -221,8 +230,9 @@ and unified stratified validation), `InferenceAndValidationAnalysisTests`
 (penalized covariance/EDF and intervals, held-out calibration, guarded
 paired comparison, seeded bootstrap stability/failure verdicts), and
 `MultivariateModelTests` (Gaussian tensor recovery and contours, categorical
-contrasts, binomial/Poisson tensor IRLS, validation, and spatial-temporal blocked
-workflow) plus a version smoke test (full suite ≈ 20s in debug).
+contrasts, dense/CSR-CGLS parity, automatic sparse dispatch, binomial/Poisson
+tensor IRLS, validation, and spatial-temporal blocked workflow) plus a version
+smoke test (full suite ≈ 40s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -286,11 +296,15 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: adaptive-bandwidth likelihood, robustness reweighting for
-  likelihood families, further families, smoothing-parameter uncertainty,
-  simultaneous bands, bootstrap BCa intervals, anisotropic spatial penalties,
-  topology-aware contour stitching, and categorical-by-smooth interactions — smoothers' behavior stays
-  frozen without a DECISIONS entry.
+- Next: avoid materializing a dense multivariate basis/score path before the
+  sparse solve, add sparse-aware conditional-inference approximations and
+  preconditioned/factorization options for harder designs, then re-profile
+  repeated dense surface workloads before considering Metal. Adaptive-bandwidth
+  likelihood, robustness reweighting for likelihood families, further
+  families, smoothing-parameter uncertainty, simultaneous bands, bootstrap BCa
+  intervals, anisotropic spatial penalties, topology-aware contour stitching,
+  and categorical-by-smooth interactions remain separate contracts —
+  smoothers' behavior stays frozen without a DECISIONS entry.
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,
   `swift run Benchmarks`, `swiftformat`, `swiftlint` before submitting).

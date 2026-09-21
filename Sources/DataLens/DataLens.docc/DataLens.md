@@ -43,6 +43,8 @@ fit.predict([7.5]) // 14.0
 - ``MultivariateModel``
 - ``MultivariateResponseFamily``
 - ``MultivariateModelSpecification``
+- ``MultivariateSolverPreference``
+- ``MultivariateSolverBackend``
 - ``MultivariateTermSpecification``
 - ``SplineTermSpecification``
 - ``TensorProductTermSpecification``

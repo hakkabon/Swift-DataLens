@@ -76,6 +76,79 @@ struct MultivariateModelTests {
         #expect(fit.gradient(at: [0, 20])?.map { $0.rounded() } == [1, 0])
     }
 
+    @Test func sparseCGLSMatchesDenseQRForCategoricalTerms() throws {
+        let levels = Array(0..<8)
+        var x: [[Double]] = []
+        var y: [Double] = []
+        for first in levels {
+            for second in levels {
+                for third in levels {
+                    x.append([Double(first), Double(second), Double(third)])
+                    y.append(1 + 0.25 * Double(first) - 0.1 * Double(second) + 0.05 * Double(third))
+                }
+            }
+        }
+        let terms: [MultivariateTermSpecification] = (0..<3).map {
+            .categorical(.init(predictorIndex: $0, levels: levels, referenceLevel: 0))
+        }
+        let dense = try #require(MultivariateModel.fit(
+            trainX: x, trainY: y, family: .gaussian,
+            specification: .init(terms: terms, penaltyWeight: 0.1, solverPreference: .denseQR,
+                                 maxIterations: 20, tolerance: 1e-9)
+        ).model)
+
+        #if canImport(NumericCoreSparse)
+        let sparse = try #require(MultivariateModel.fit(
+            trainX: x, trainY: y, family: .gaussian,
+            specification: .init(terms: terms, penaltyWeight: 0.1, solverPreference: .sparseCGLS,
+                                 maxIterations: 20, tolerance: 1e-9)
+        ).model)
+        #expect(sparse.solverBackend == .sparseCGLS)
+        for point in [[0.0, 0, 0], [4, 2, 7], [7, 6, 1]] {
+            #expect(abs(sparse.predict(point) - dense.predict(point)) < 1e-6)
+        }
+        #else
+        #expect(dense.solverBackend == .denseQR)
+        #endif
+    }
+
+    @Test func largeLowDensityFactorsAutomaticallySelectSparseCGLS() throws {
+        #if canImport(NumericCoreSparse)
+        let levels = Array(0..<64)
+        let rowCount = 1_000
+        var x: [[Double]] = []
+        var y: [Double] = []
+        for row in 0..<rowCount {
+            let first = Double(row % levels.count)
+            let second = Double((row / 2 + 17) % levels.count)
+            let third = Double((row / 3 + 34) % levels.count)
+            let fourth = Double((row / 4 + 51) % levels.count)
+            x.append([first, second, third, fourth])
+            y.append(1 + 0.2 * first / 63 - 0.15 * second / 63 + 0.1 * third / 63 - 0.05 * fourth / 63)
+        }
+        let terms: [MultivariateTermSpecification] = (0..<4).map {
+            .categorical(.init(predictorIndex: $0, levels: levels, referenceLevel: 0))
+        }
+        let fit = try #require(MultivariateModel.fit(
+            trainX: x, trainY: y, family: .gaussian,
+            specification: .init(terms: terms, penaltyWeight: 0.1, maxIterations: 40, tolerance: 1e-8)
+        ).model)
+        #expect(fit.solverBackend == MultivariateSolverBackend.sparseCGLS)
+        #expect(fit.deviance.isFinite && fit.deviance < fit.nullDeviance)
+        #endif
+    }
+
+    @Test func phase13SpecificationsDecodeWithAutomaticSolverSelection() throws {
+        let phase13JSON = """
+        {"defaultKnotCount":3,"penaltyWeight":1,"maxIterations":50,"tolerance":1e-08}
+        """
+        let specification = try JSONDecoder().decode(
+            MultivariateModelSpecification.self, from: Data(phase13JSON.utf8)
+        )
+        #expect(specification.terms == nil)
+        #expect(specification.solverPreference == .automatic)
+    }
+
     @Test func binomialTensorUsesIRLSAndUnifiedValidation() throws {
         var rng = SeedableRandomNumberGenerator(seed: 0x7135_2026)
         var x: [[Double]] = []
