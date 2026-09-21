@@ -527,7 +527,7 @@ public struct LikelihoodAdditiveModel: Sendable {
         for specification in specifications {
             let values = rows.map { $0[specification.predictorIndex] }
             guard let minimum = values.min(), let maximum = values.max(), maximum > minimum else { return nil }
-            let knots = (1...specification.knotCount).map {
+            let knots = specification.knotCount == 0 ? [] : (1...specification.knotCount).map {
                 Double($0) / Double(specification.knotCount + 1)
             }
             let raw = values.map { value in

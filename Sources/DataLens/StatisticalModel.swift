@@ -10,6 +10,9 @@ public enum StatisticalModelStrategy: String, Codable, Sendable, Hashable {
     case additiveGaussian
     case additiveBinomial
     case additivePoisson
+    case multivariateGaussian
+    case multivariateBinomial
+    case multivariatePoisson
 }
 
 /// Serializable configuration for a reproducible statistical fit.
@@ -29,13 +32,16 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
     /// Configuration used by `.additiveBinomial` and `.additivePoisson`.
     /// `nil` selects the default centered regression-spline basis and penalty.
     public let likelihoodAdditive: LikelihoodAdditiveModelSpecification?
+    /// Configuration used by the explicit multivariate spline strategies.
+    public let multivariate: MultivariateModelSpecification?
 
     public init(
         strategy: StatisticalModelStrategy = .automaticSmoothing,
         degree: Int = 2, spans: [Double]? = nil, robustIterations: Int = 4,
         adaptiveContender: Bool = true,
         additive: AdditiveModelSpecification? = nil,
-        likelihoodAdditive: LikelihoodAdditiveModelSpecification? = nil
+        likelihoodAdditive: LikelihoodAdditiveModelSpecification? = nil,
+        multivariate: MultivariateModelSpecification? = nil
     ) {
         self.strategy = strategy
         self.degree = degree
@@ -44,6 +50,7 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
         self.adaptiveContender = adaptiveContender
         self.additive = additive
         self.likelihoodAdditive = likelihoodAdditive
+        self.multivariate = multivariate
     }
 
     var isValid: Bool {
@@ -58,6 +65,8 @@ public struct StatisticalModelSpecification: Codable, Sendable, Hashable {
             additive?.isValid ?? true
         case .additiveBinomial, .additivePoisson:
             likelihoodAdditive?.isValid ?? true
+        case .multivariateGaussian, .multivariateBinomial, .multivariatePoisson:
+            multivariate?.isValid ?? true
         }
     }
 }
@@ -68,6 +77,9 @@ public enum StatisticalModelKind: String, Codable, Sendable, Hashable {
     case additiveGaussian
     case additiveBinomial
     case additivePoisson
+    case multivariateGaussian
+    case multivariateBinomial
+    case multivariatePoisson
 }
 
 /// A common fitted-model contract for smoothers and additive main-effects.
@@ -83,6 +95,7 @@ public struct FittedStatisticalModel: Sendable {
         case smoother(FittedSmoother)
         case additive(AdditiveModel)
         case likelihoodAdditive(LikelihoodAdditiveModel)
+        case multivariate(MultivariateModel)
     }
 
     private let storage: Storage
@@ -150,6 +163,25 @@ public struct FittedStatisticalModel: Sendable {
         )
     }
 
+    /// Wrap a converged generalized multivariate spline model.
+    public init(
+        multivariate: MultivariateModel,
+        specification: StatisticalModelSpecification? = nil
+    ) {
+        storage = .multivariate(multivariate)
+        switch multivariate.family {
+        case .gaussian: kind = .multivariateGaussian
+        case .binomial: kind = .multivariateBinomial
+        case .poisson: kind = .multivariatePoisson
+        }
+        self.specification = specification
+        tuningSummary = nil
+        trainingPredictors = multivariate.trainX
+        trainingResponses = multivariate.trainY
+        keptIndices = multivariate.keptIndices
+        diagnostics = multivariate.diagnostics
+    }
+
     /// Wrap a converged binomial or Poisson penalized additive model.
     public init(
         likelihoodAdditive: LikelihoodAdditiveModel,
@@ -208,6 +240,20 @@ public struct FittedStatisticalModel: Sendable {
             return FittedStatisticalModel(
                 likelihoodAdditive: additive, specification: specification
             )
+        case .multivariateGaussian, .multivariateBinomial, .multivariatePoisson:
+            let family: MultivariateResponseFamily
+            switch specification.strategy {
+            case .multivariateGaussian: family = .gaussian
+            case .multivariateBinomial: family = .binomial
+            case .multivariatePoisson: family = .poisson
+            default: return nil
+            }
+            guard let multivariate = MultivariateModel.fit(
+                trainX: trainX, trainY: trainY, family: family,
+                specification: specification.multivariate ?? MultivariateModelSpecification(),
+                droppingMissing: true
+            ).model else { return nil }
+            return FittedStatisticalModel(multivariate: multivariate, specification: specification)
         }
     }
 
@@ -217,6 +263,7 @@ public struct FittedStatisticalModel: Sendable {
         case .smoother(let smoother): smoother.fittedValues
         case .additive(let additive): additive.fittedValues
         case .likelihoodAdditive(let additive): additive.fittedValues
+        case .multivariate(let model): model.fittedValues
         }
     }
 
@@ -226,6 +273,7 @@ public struct FittedStatisticalModel: Sendable {
         case .smoother(let smoother): smoother.predict(x, extrapolation: extrapolation)
         case .additive(let additive): additive.predict(x, extrapolation: extrapolation)
         case .likelihoodAdditive(let additive): additive.predict(x)
+        case .multivariate(let model): model.predict(x)
         }
     }
 
@@ -235,6 +283,7 @@ public struct FittedStatisticalModel: Sendable {
         case .smoother(let smoother): smoother.predict(xs, extrapolation: extrapolation)
         case .additive(let additive): additive.predict(xs, extrapolation: extrapolation)
         case .likelihoodAdditive(let additive): additive.predict(xs)
+        case .multivariate(let model): model.predict(xs)
         }
     }
 
@@ -244,6 +293,7 @@ public struct FittedStatisticalModel: Sendable {
         case .smoother(let smoother): smoother.gradient(at: x)
         case .additive(let additive): additive.gradient(at: x)
         case .likelihoodAdditive(let additive): additive.gradient(at: x)
+        case .multivariate(let model): model.gradient(at: x)
         }
     }
 
@@ -255,6 +305,7 @@ public struct FittedStatisticalModel: Sendable {
         case .smoother(let smoother): return smoother.standardError(at: x, extrapolation: extrapolation)
         case .additive: return nil
         case .likelihoodAdditive(let additive): return additive.standardError(at: x)
+        case .multivariate(let model): return model.standardError(at: x)
         }
     }
 
@@ -271,6 +322,8 @@ public struct FittedStatisticalModel: Sendable {
         switch storage {
         case .likelihoodAdditive(let additive):
             return additive.meanConfidenceInterval(at: x, confidenceLevel: confidenceLevel)
+        case .multivariate(let model):
+            return model.meanConfidenceInterval(at: x, confidenceLevel: confidenceLevel)
         case .smoother, .additive:
             return nil
         }
@@ -285,6 +338,7 @@ public struct FittedStatisticalModel: Sendable {
         case .smoother: []
         case .additive(let additive): additive.termDiagnostics
         case .likelihoodAdditive: []
+        case .multivariate: []
         }
     }
 
@@ -305,6 +359,7 @@ public struct FittedStatisticalModel: Sendable {
             )
         case .likelihoodAdditive(let additive):
             additive.partialEffect(forPredictor: predictorIndex, count: count)
+        case .multivariate: nil
         }
     }
 
@@ -324,7 +379,21 @@ public struct FittedStatisticalModel: Sendable {
             )
         case .smoother, .additive:
             return nil
+        case .multivariate:
+            return nil
         }
+    }
+
+    /// Plot-ready contour grid for a multivariate surface or spatial workflow.
+    public func contour(
+        xPredictorIndex: Int, yPredictorIndex: Int, baseline: [Double],
+        xCount: Int = 50, yCount: Int = 50
+    ) -> ContourGrid? {
+        guard case .multivariate(let model) = storage else { return nil }
+        return model.contour(
+            xPredictorIndex: xPredictorIndex, yPredictorIndex: yPredictorIndex,
+            baseline: baseline, xCount: xCount, yCount: yCount
+        )
     }
 
     /// Family-correct retained-training residuals.
@@ -341,6 +410,8 @@ public struct FittedStatisticalModel: Sendable {
             }
         case .likelihoodAdditive(let additive):
             return additive.residuals(kind)
+        case .multivariate(let model):
+            return model.residuals(kind)
         }
     }
 }

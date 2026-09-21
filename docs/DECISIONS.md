@@ -528,3 +528,45 @@ ranked across families; remapped folds receive a non-comparable verdict.
 `ValidationComparison` intentionally has no p-value: repeated CV dependence
 and adaptive model selection require a future, explicitly designed comparison
 procedure rather than a decorative significance star.
+
+## 29. Multivariate structure is explicit: tensor interactions, factors, and spatial workflows share one penalized contract
+
+Phase 13 adds `MultivariateModel` rather than extending either the Gaussian
+LOESS backfitter or the one-dimensional likelihood GAM past their stated
+contracts. Its design matrix is composed from centered cubic truncated-power
+main-effect bases, tensor products of two continuous bases, and centered
+treatment-coded categorical indicators. A standalone tensor is deliberately
+an **interaction-only** term: callers add main effects when that is the
+scientific model. This avoids silently changing an interaction request into a
+full surface. `SpatialTemporalWorkflowSpecification` is the one semantic
+exception: spatial work normally means a surface, so it expands to both
+spatial margins and their tensor interaction, plus an optional temporal
+smooth. The resolved terms are still ordinary terms, so saved specifications,
+bootstrap refits, and cross-validation all use the same implementation.
+
+Categorical predictors are exact integer codes, not rounded floating values.
+The specification may declare levels/reference in advance, which makes a
+replayed workflow reject an unseen training category instead of inventing a
+column. A query at an unseen category returns unavailable (`NaN` through the
+model's public prediction API); it is never silently mapped to the reference
+level. Tensor dimensions are capped at 256 total coefficients and individual
+knot counts are bounded, guarding an accidental UI request from allocating an
+unbounded dense covariance matrix.
+
+Gaussian fits use one penalized WLS update; binomial and Poisson fits use the
+same step-halved IRLS and penalized-score verdict as Phase 11. All three report
+`trace((XᵀWX + 2λPᵀP)⁻¹XᵀWX)` and a fixed-term sandwich covariance; Gaussian
+covariance uses a residual scale based on that EDF. This is conditional
+inference, not smoothing-selection uncertainty. Tensor-product penalties are
+currently isotropic ridge penalties. Anisotropic directional penalties,
+factor-by-smooth interactions, offsets/exposures, and smoothing selection are
+separate future contracts.
+
+`ContourGrid` carries a regular response-scale raster with documented axis
+orientation and produces deterministic fixed-pairing marching-squares
+segments. It does not claim topology-aware stitching across ambiguous saddle
+cells; clients needing topological contours can consume the grid. Temporal
+ordering is likewise not guessed: users select blocked cross-validation when
+their source order is a forecasting boundary. This keeps a spatial map and a
+time-series forecast from receiving the same unjustified exchangeability
+assumption.

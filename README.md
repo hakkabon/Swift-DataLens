@@ -9,6 +9,8 @@ Local regression in pure Swift — `import DataLens`.
 > smoothing (`AdaptiveLoess`), local likelihood (`LocalLikelihood`),
 > Gaussian and penalized-likelihood additive main-effects models (`AdditiveModel`,
 > `LikelihoodAdditiveModel`),
+> generalized multivariate spline models (tensor interactions, categorical
+> effects, spatial/temporal workflows, contour grids),
 > conditional GAM inference, calibrated out-of-fold validation, reproducible
 > bootstrap stability, guarded model comparison, batch evaluation, one-call tuning, plus derivatives, explicit
 > extrapolation, and missing-data handling. Least squares via LAPACK on
@@ -76,6 +78,16 @@ Local regression in pure Swift — `import DataLens`.
   freedom, link/mean standard errors, response-scale intervals, and
   link-scale component intervals. These condition on the selected spline
   basis and penalty; they are explicitly not post-selection intervals.
+- **Multivariate statistics (`MultivariateModel`):** explicit Gaussian,
+  binomial-logit, and Poisson-log tensor-product spline models use the same
+  penalized WLS/IRLS convergence contract as likelihood GAMs. Spline main
+  effects, treatment-coded integer categorical effects, and interaction-only
+  tensors are composed explicitly; `SpatialTemporalWorkflowSpecification`
+  expands a spatial surface into its two margins plus tensor interaction and
+  an optional temporal smooth. `ContourGrid` supplies regular response-scale
+  grids and deterministic marching-squares segments for native map/contour
+  views. Blocked cross-validation remains the explicit choice for temporal
+  forecasting boundaries.
 - **Calibration, stability, and comparison:** `ModelValidation` produces
   equal-frequency binary reliability bins, Brier score, and binned ECE only
   from out-of-fold probabilities. `ModelResampling.bootstrap` deterministically
@@ -169,7 +181,7 @@ swift test
 swift test --filter DataLensTests
 ```
 
-123 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
+129 tests, all deterministic-or-seeded: `LoessTests` (ported 1:1, same
 seeds/tolerances — exact linear/plane/quadratic reproduction, outlier
 recovery, symmetry, SE/trace bounds, GCV span selection, span
 selection on dropped rows, invalid input),
@@ -207,8 +219,10 @@ family-appropriate scores), `LikelihoodAdditiveModelTests` (binomial and
 Poisson IRLS recovery, deviance/null invariant, score/convergence verdicts,
 and unified stratified validation), `InferenceAndValidationAnalysisTests`
 (penalized covariance/EDF and intervals, held-out calibration, guarded
-paired comparison, seeded bootstrap stability/failure verdicts) plus a version smoke test (full
-suite ≈ 20s in debug).
+paired comparison, seeded bootstrap stability/failure verdicts), and
+`MultivariateModelTests` (Gaussian tensor recovery and contours, categorical
+contrasts, binomial/Poisson tensor IRLS, validation, and spatial-temporal blocked
+workflow) plus a version smoke test (full suite ≈ 20s in debug).
 
 ```bash
 swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
@@ -235,9 +249,10 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 │       ├── LikelihoodAdditiveInference.swift
 │       ├── LikelihoodAdditiveModel.swift
 │       ├── LocalLikelihood.swift
-│       ├── ModelResampling.swift
-│       ├── ValidationAnalysis.swift
 │       ├── Loess.swift
+│       ├── ModelResampling.swift
+│       ├── MultivariateModel.swift
+│       ├── ValidationAnalysis.swift
 │       ├── Internal
 │       │   ├── Concurrency.swift (indexed task-group batch helper)
 │       │   ├── Descriptive.swift (median)
@@ -261,6 +276,7 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
         ├── LikelihoodAdditiveModelTests.swift
         ├── LocalLikelihoodTests.swift
         ├── LoessTests.swift
+        ├── MultivariateModelTests.swift
         ├── NearestNeighborTests.swift
         └── SolverSeamTests.swift
 ```
@@ -272,7 +288,8 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
   Divergences between the copies need a `docs/DECISIONS.md` entry.
 - Next: adaptive-bandwidth likelihood, robustness reweighting for
   likelihood families, further families, smoothing-parameter uncertainty,
-  simultaneous bands, and bootstrap BCa intervals — smoothers' behavior stays
+  simultaneous bands, bootstrap BCa intervals, anisotropic spatial penalties,
+  topology-aware contour stitching, and categorical-by-smooth interactions — smoothers' behavior stays
   frozen without a DECISIONS entry.
 - Loader-style work is clean-room by policy (see `docs/DECISIONS.md`);
   contributions welcome (`swift build`, `swift test`,

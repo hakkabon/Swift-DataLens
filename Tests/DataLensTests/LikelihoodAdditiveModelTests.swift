@@ -78,6 +78,17 @@ struct LikelihoodAdditiveModelTests {
         #expect(incomplete.model == nil)
     }
 
+    @Test func zeroInteriorKnotsIsAValidCubicPolynomialBasis() {
+        let (x, y) = binomialFixture()
+        let result = LikelihoodAdditiveModel.fit(
+            trainX: x, trainY: y, family: .binomial,
+            specification: .init(defaultKnotCount: 0, penaltyWeight: 0.1,
+                                 maxIterations: 100, tolerance: 1e-8)
+        )
+        #expect(result.status == .converged)
+        #expect(result.model?.deviance ?? .infinity < result.model?.nullDeviance ?? -.infinity)
+    }
+
     @Test func unifiedLikelihoodSpecificationsRouteToTheirDeclaredFamilies() throws {
         let (x, y) = binomialFixture(100)
         let specification = StatisticalModelSpecification(

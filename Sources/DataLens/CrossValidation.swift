@@ -119,6 +119,9 @@ public enum CrossValidation {
         case .additiveGaussian: family = .gaussian
         case .additiveBinomial: family = .binomial
         case .additivePoisson: family = .poisson
+        case .multivariateGaussian: family = .gaussian
+        case .multivariateBinomial: family = .binomial
+        case .multivariatePoisson: family = .poisson
         case .automaticSmoothing: family = responseFamily(for: finiteRows.map(\.2))
         }
         guard configuration.partitioning != .stratifiedBinary || family == .binomial else { return nil }
