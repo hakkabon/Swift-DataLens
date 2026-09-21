@@ -267,6 +267,15 @@ public struct FittedStatisticalModel: Sendable {
         }
     }
 
+    /// Native CSR execution evidence for a multivariate sparse-CGLS fit.
+    ///
+    /// `nil` means this model did not accept a native sparse final update;
+    /// consumers must not infer sparse execution from a requested preference.
+    public var sparseExecution: SparseExecutionEvidence? {
+        guard case .multivariate(let model) = storage else { return nil }
+        return model.sparseExecution
+    }
+
     /// Fitted mean at a predictor row, or `.nan` when it cannot be evaluated.
     public func predict(_ x: [Double], extrapolation: ExtrapolationPolicy = .polynomial) -> Double {
         switch storage {

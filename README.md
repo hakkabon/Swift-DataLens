@@ -89,10 +89,16 @@ Local regression in pure Swift — `import DataLens`.
   views. Blocked cross-validation remains the explicit choice for temporal
   forecasting boundaries.
 - **Profile-led sparse solves:** large, low-density multivariate factor
-  designs automatically use Rust-NumericCore's portable CSR CGLS bridge;
+  designs automatically emit a CSR operator directly from their fitted term
+  bases and use Rust-NumericCore's portable CGLS bridge; the solve no longer
+  obtains CSR by re-scanning a dense design matrix.
   compact and dense designs retain rank-revealing QR. Set
   `MultivariateSolverPreference` to require either route, and inspect
-  `MultivariateModel.solverBackend` to record the route actually used.
+  `MultivariateModel.solverBackend` and `sparseExecution` (also forwarded by
+  `FittedStatisticalModel`) to record the route and the accepted CGLS
+  dimensions, nonzeros, iteration count, normal residual, and working
+  objective. Dense model diagnostics and conditional inference remain dense
+  in this release.
   The representative 12,000-row/253-coefficient factor benchmark fell from
   12.22 s to 9.37 s in the checked release run. Sparse non-convergence falls
   back to QR only under `.automatic`; an explicit `.sparseCGLS` request fails
@@ -296,9 +302,10 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: avoid materializing a dense multivariate basis/score path before the
-  sparse solve, add sparse-aware conditional-inference approximations and
-  preconditioned/factorization options for harder designs, then re-profile
+- Next: extend native sparse execution from categorical-factor operators to
+  sparse basis/score/inference paths, add sparse-aware conditional-inference
+  approximations and preconditioned/factorization options for harder designs,
+  then re-profile
   repeated dense surface workloads before considering Metal. Adaptive-bandwidth
   likelihood, robustness reweighting for likelihood families, further
   families, smoothing-parameter uncertainty, simultaneous bands, bootstrap BCa

@@ -135,6 +135,23 @@ struct MultivariateModelTests {
         ).model)
         #expect(fit.solverBackend == MultivariateSolverBackend.sparseCGLS)
         #expect(fit.deviance.isFinite && fit.deviance < fit.nullDeviance)
+        let execution = try #require(fit.sparseExecution)
+        #expect(execution.designRows == rowCount)
+        #expect(execution.designColumns == 253)
+        #expect(execution.nonZeroCount < execution.designRows * execution.designColumns / 8)
+        #expect(execution.converged)
+        #expect(execution.iterations > 0)
+        #expect(execution.normalResidualNorm.isFinite)
+        #expect(execution.workingObjective.isFinite)
+
+        let unified = FittedStatisticalModel(
+            multivariate: fit,
+            specification: .init(strategy: .multivariateGaussian, multivariate: .init(
+                terms: terms, penaltyWeight: 0.1, solverPreference: .automatic,
+                maxIterations: 40, tolerance: 1e-8
+            ))
+        )
+        #expect(unified.sparseExecution == execution)
         #endif
     }
 

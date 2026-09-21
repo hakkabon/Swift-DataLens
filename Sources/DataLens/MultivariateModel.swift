@@ -40,6 +40,50 @@ public enum MultivariateSolverBackend: String, Codable, Sendable, Hashable {
     case denseQRFallback
 }
 
+/// Auditable outcome of the final native CSR statistical solve.
+///
+/// This records the numerical work actually accepted by a multivariate fit,
+/// rather than merely retaining a solver preference. It is present only when
+/// ``MultivariateSolverBackend/sparseCGLS`` supplied the final update. The
+/// residual is CGLS's relative normal-equation residual; it is not a model
+/// residual or a goodness-of-fit statistic.
+public struct SparseExecutionEvidence: Codable, Sendable, Hashable {
+    /// Shape of the CSR design supplied to Rust-NumericCore.
+    public let designRows: Int
+    public let designColumns: Int
+    public let nonZeroCount: Int
+    public let iterations: Int
+    /// Relative normal-equation residual reported by CGLS.
+    public let normalResidualNorm: Double
+    public let converged: Bool
+    /// Weighted residual sum of squares for CGLS's final working solve.
+    public let weightedResidualSumOfSquares: Double
+    /// Penalty portion of CGLS's final working objective.
+    public let penaltyContribution: Double
+
+    /// `weightedResidualSumOfSquares + penaltyContribution` for the final
+    /// working least-squares update. It is intentionally distinct from a
+    /// model family's deviance and penalized likelihood.
+    public var workingObjective: Double {
+        weightedResidualSumOfSquares + penaltyContribution
+    }
+
+    fileprivate init(
+        designRows: Int, designColumns: Int, nonZeroCount: Int,
+        iterations: Int, normalResidualNorm: Double, converged: Bool,
+        weightedResidualSumOfSquares: Double, penaltyContribution: Double
+    ) {
+        self.designRows = designRows
+        self.designColumns = designColumns
+        self.nonZeroCount = nonZeroCount
+        self.iterations = iterations
+        self.normalResidualNorm = normalResidualNorm
+        self.converged = converged
+        self.weightedResidualSumOfSquares = weightedResidualSumOfSquares
+        self.penaltyContribution = penaltyContribution
+    }
+}
+
 /// One continuous univariate regression-spline main effect.
 public struct SplineTermSpecification: Codable, Sendable, Hashable {
     public let predictorIndex: Int
@@ -463,6 +507,9 @@ public struct MultivariateModel: Sendable {
     public let penaltyWeight: Double
     /// Numerical solve backend used for the final accepted update.
     public let solverBackend: MultivariateSolverBackend
+    /// Native CSR CGLS evidence for the final update, when sparse execution
+    /// was accepted. Dense QR and dense fallback retain `nil` here.
+    public let sparseExecution: SparseExecutionEvidence?
     public let inference: MultivariateInference
     public let residualScale: Double
     public let iterations: Int
@@ -474,7 +521,8 @@ public struct MultivariateModel: Sendable {
         intercept: Double, terms: [MultivariateTerm], fittedValues: [Double],
         linearPredictors: [Double], deviance: Double, nullDeviance: Double,
         penalizedObjective: Double, penaltyWeight: Double, inference: MultivariateInference,
-        solverBackend: MultivariateSolverBackend, residualScale: Double, iterations: Int,
+        solverBackend: MultivariateSolverBackend, sparseExecution: SparseExecutionEvidence?,
+        residualScale: Double, iterations: Int,
         scoreInfinityNorm: Double, keptIndices: [Int]
     ) {
         self.family = family
@@ -489,6 +537,7 @@ public struct MultivariateModel: Sendable {
         self.penalizedObjective = penalizedObjective
         self.penaltyWeight = penaltyWeight
         self.solverBackend = solverBackend
+        self.sparseExecution = sparseExecution
         self.inference = inference
         self.residualScale = residualScale
         self.iterations = iterations
@@ -519,6 +568,17 @@ public struct MultivariateModel: Sendable {
         }
         let design = basis.design
         let penalty = penaltyRows(columnCount: design[0].count)
+        // Build CSR directly from term bases only when this fit may use it.
+        // The dense design remains available for exact current inference and
+        // diagnostics, but the CGLS operator is no longer rebuilt by scanning
+        // that dense matrix at every fit.
+        let sparseRequested = sparseRequested(
+            design: design, preference: specification.solverPreference
+        )
+        let nativeSparseDesign = sparseRequested ? sparseDesign(
+            rows: x, builders: basis.builders, ranges: basis.ranges,
+            columnCount: design[0].count
+        ) : nil
         var coefficients = [Double](repeating: 0, count: design[0].count)
         coefficients[0] = startIntercept(y, family: family)
         var current = objective(design: design, response: y, coefficients: coefficients,
@@ -539,6 +599,7 @@ public struct MultivariateModel: Sendable {
                     design: design, response: response, weights: weights, penalty: penalty,
                     penaltyWeight: 2 * specification.penaltyWeight,
                     preference: specification.solverPreference,
+                    sparseRequested: sparseRequested, sparseDesign: nativeSparseDesign,
                     tolerance: specification.tolerance
                   ) else {
                 return .init(status: .numericalFailure, iterations: iteration - 1,
@@ -613,6 +674,7 @@ public struct MultivariateModel: Sendable {
                     deviance: current.deviance, nullDeviance: nullDeviance(y, family: family),
                     penalizedObjective: current.value, penaltyWeight: specification.penaltyWeight,
                     inference: inference, solverBackend: solve.backend,
+                    sparseExecution: solve.sparseExecution,
                     residualScale: residualScale, iterations: iteration,
                     scoreInfinityNorm: score, keptIndices: cleaned.2
                 )
@@ -750,9 +812,61 @@ public struct MultivariateModel: Sendable {
         var isFinite: Bool { value.isFinite && deviance.isFinite }
     }
 
+    /// A term-native CSR design. Its values are emitted directly by each
+    /// fitted basis, rather than derived by scanning the dense diagnostic
+    /// design. This lightweight representation keeps the DataLens core
+    /// portable; conversion to `NumericCoreSparse.SparseMatrix` happens only
+    /// at the Swift-NumericCore execution boundary.
+    private struct NativeSparseDesign: Sendable {
+        let rows: Int
+        let columns: Int
+        let rowPointers: [Int]
+        let columnIndices: [Int]
+        let values: [Double]
+
+        var nonZeroCount: Int { values.count }
+    }
+
+    private struct NumericalSolve {
+        let coefficients: [Double]
+        let backend: MultivariateSolverBackend
+        let sparseExecution: SparseExecutionEvidence?
+    }
+
     private struct BasisBuilder {
         let specification: MultivariateTermSpecification
         let basis: MultivariateBasis
+    }
+
+    /// Emit CSR rows from the fitted bases. Categorical treatment terms add
+    /// just their active indicator; this avoids the former dense-to-CSR
+    /// re-encoding path for the large-factor workflows that select CGLS.
+    private static func sparseDesign(
+        rows: [[Double]], builders: [BasisBuilder], ranges: [Range<Int>],
+        columnCount: Int
+    ) -> NativeSparseDesign? {
+        guard !rows.isEmpty, columnCount > 0, builders.count == ranges.count else { return nil }
+        var rowPointers = [0]
+        var columnIndices: [Int] = []
+        var values: [Double] = []
+        for row in rows {
+            columnIndices.append(0)
+            values.append(1)
+            for (builder, range) in zip(builders, ranges) {
+                guard let termValues = builder.basis.values(at: row), termValues.count == range.count else {
+                    return nil
+                }
+                for offset in termValues.indices where termValues[offset] != 0 {
+                    columnIndices.append(range.lowerBound + offset)
+                    values.append(termValues[offset])
+                }
+            }
+            rowPointers.append(values.count)
+        }
+        return NativeSparseDesign(
+            rows: rows.count, columns: columnCount, rowPointers: rowPointers,
+            columnIndices: columnIndices, values: values
+        )
     }
 
     private static func resolvedTerms(
@@ -972,21 +1086,16 @@ public struct MultivariateModel: Sendable {
 
     private static func solvePenalizedWeightedLeastSquares(
         design: [[Double]], response: [Double], weights: [Double], penalty: [[Double]], penaltyWeight: Double,
-        preference: MultivariateSolverPreference, tolerance: Double
-    ) -> (coefficients: [Double], backend: MultivariateSolverBackend)? {
-        let sparseRequested: Bool
-        switch preference {
-        case .automatic: sparseRequested = sparseGeometryIsWorthwhile(design)
-        case .denseQR: sparseRequested = false
-        case .sparseCGLS: sparseRequested = true
-        }
+        preference: MultivariateSolverPreference, sparseRequested: Bool,
+        sparseDesign: NativeSparseDesign?, tolerance: Double
+    ) -> NumericalSolve? {
         if sparseRequested {
             #if canImport(NumericCoreSparse)
-            if let sparse = sparsePenalizedSolve(
-                design: design, response: response, weights: weights, penaltyWeight: penaltyWeight,
+            if let sparseDesign, let sparse = sparsePenalizedSolve(
+                design: sparseDesign, response: response, weights: weights, penaltyWeight: penaltyWeight,
                 tolerance: tolerance
             ) {
-                return (sparse, .sparseCGLS)
+                return sparse
             }
             guard preference == .automatic else { return nil }
             #else
@@ -998,7 +1107,11 @@ public struct MultivariateModel: Sendable {
             design: design, response: response, weights: weights,
             penaltyRows: penalty, penaltyWeight: penaltyWeight
         )?.coefficients else { return nil }
-        return (coefficients, sparseRequested ? .denseQRFallback : .denseQR)
+        return NumericalSolve(
+            coefficients: coefficients,
+            backend: sparseRequested ? .denseQRFallback : .denseQR,
+            sparseExecution: nil
+        )
         #else
         var augmented: [[Double]] = []
         var augmentedResponse: [Double] = []
@@ -1015,8 +1128,22 @@ public struct MultivariateModel: Sendable {
         guard let coefficients = LinAlg.leastSquares(design: augmented, response: augmentedResponse) else {
             return nil
         }
-        return (coefficients, sparseRequested ? .denseQRFallback : .denseQR)
+        return NumericalSolve(
+            coefficients: coefficients,
+            backend: sparseRequested ? .denseQRFallback : .denseQR,
+            sparseExecution: nil
+        )
         #endif
+    }
+
+    private static func sparseRequested(
+        design: [[Double]], preference: MultivariateSolverPreference
+    ) -> Bool {
+        switch preference {
+        case .automatic: return sparseGeometryIsWorthwhile(design)
+        case .denseQR: return false
+        case .sparseCGLS: return true
+        }
     }
 
     /// Phase 14 dispatch rule, calibrated against the release benchmark's
@@ -1036,43 +1163,35 @@ public struct MultivariateModel: Sendable {
 
     #if canImport(NumericCoreSparse)
     private static func sparsePenalizedSolve(
-        design: [[Double]], response: [Double], weights: [Double], penaltyWeight: Double,
+        design: NativeSparseDesign, response: [Double], weights: [Double], penaltyWeight: Double,
         tolerance: Double
-    ) -> [Double]? {
-        guard let sparseDesign = csrMatrix(design),
-              let sparsePenalty = identityPenalty(columnCount: design[0].count) else { return nil }
+    ) -> NumericalSolve? {
+        guard let sparseDesign = try? SparseMatrix<Double>(
+            rows: design.rows, cols: design.columns, rowPointers: design.rowPointers,
+            columnIndices: design.columnIndices, values: design.values
+        ), let sparsePenalty = identityPenalty(columnCount: design.columns) else { return nil }
         do {
             let result = try SparseStatisticalSolver.penalizedWeightedLeastSquares(
                 design: sparseDesign, response: response, weights: weights, penalty: sparsePenalty,
                 penaltyWeight: penaltyWeight,
-                maxIterations: max(1_000, min(10_000, design[0].count * 20)),
+                maxIterations: max(1_000, min(10_000, design.columns * 20)),
                 tolerance: min(tolerance, 1e-10)
             )
-            guard result.converged, result.coefficients.count == design[0].count,
+            guard result.converged, result.coefficients.count == design.columns,
                   result.coefficients.allSatisfy(\.isFinite) else { return nil }
-            return result.coefficients
+            return NumericalSolve(
+                coefficients: result.coefficients, backend: .sparseCGLS,
+                sparseExecution: SparseExecutionEvidence(
+                    designRows: design.rows, designColumns: design.columns,
+                    nonZeroCount: design.nonZeroCount, iterations: result.iterations,
+                    normalResidualNorm: result.residualNorm, converged: result.converged,
+                    weightedResidualSumOfSquares: result.weightedResidualSumOfSquares,
+                    penaltyContribution: result.penaltyContribution
+                )
+            )
         } catch {
             return nil
         }
-    }
-
-    private static func csrMatrix(_ dense: [[Double]]) -> SparseMatrix<Double>? {
-        guard let columnCount = dense.first?.count, columnCount > 0,
-              dense.allSatisfy({ $0.count == columnCount }) else { return nil }
-        var rowPointers = [0]
-        var columnIndices: [Int] = []
-        var values: [Double] = []
-        for row in dense {
-            for column in row.indices where row[column] != 0 {
-                columnIndices.append(column)
-                values.append(row[column])
-            }
-            rowPointers.append(values.count)
-        }
-        return try? SparseMatrix(
-            rows: dense.count, cols: columnCount, rowPointers: rowPointers,
-            columnIndices: columnIndices, values: values
-        )
     }
 
     private static func identityPenalty(columnCount: Int) -> SparseMatrix<Double>? {
