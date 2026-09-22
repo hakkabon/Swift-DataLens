@@ -655,7 +655,7 @@ public struct LikelihoodAdditiveModel: Sendable {
             augmented.append(row.map { penaltyScale * $0 })
             augmentedResponse.append(0)
         }
-        return LinAlg.leastSquares(augmented, augmentedResponse)
+        return LinAlg.leastSquares(design: augmented, response: augmentedResponse)
         #endif
     }
 
