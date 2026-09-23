@@ -40,6 +40,17 @@ public enum MultivariateSolverBackend: String, Codable, Sendable, Hashable {
     case denseQRFallback
 }
 
+/// Conditional-inference route retained with a multivariate fit.
+///
+/// Full dense covariance remains the exact fixed-basis calculation for compact
+/// designs. Large native sparse fits use a diagonal approximation instead of
+/// allocating a dense covariance matrix whose size would defeat sparse
+/// execution; intervals then remain explicitly conditional and approximate.
+public enum SparseInferenceMethod: String, Codable, Sendable, Hashable {
+    case exactDenseCovariance
+    case diagonalConditionalApproximation
+}
+
 /// Auditable outcome of the final native CSR statistical solve.
 ///
 /// This records the numerical work actually accepted by a multivariate fit,
@@ -60,6 +71,14 @@ public struct SparseExecutionEvidence: Codable, Sendable, Hashable {
     public let weightedResidualSumOfSquares: Double
     /// Penalty portion of CGLS's final working objective.
     public let penaltyContribution: Double
+    /// Iteration budget supplied to the accepted CGLS working solve. `nil`
+    /// means a legacy evidence record did not retain this setting.
+    public let workingSolveIterationLimit: Int?
+    /// Relative normal-residual tolerance supplied to the working solve.
+    /// `nil` means a legacy record did not retain it.
+    public let workingSolveTolerance: Double?
+    /// Inference route retained with the fitted coefficients.
+    public let inferenceMethod: SparseInferenceMethod
 
     /// `weightedResidualSumOfSquares + penaltyContribution` for the final
     /// working least-squares update. It is intentionally distinct from a
@@ -71,7 +90,9 @@ public struct SparseExecutionEvidence: Codable, Sendable, Hashable {
     fileprivate init(
         designRows: Int, designColumns: Int, nonZeroCount: Int,
         iterations: Int, normalResidualNorm: Double, converged: Bool,
-        weightedResidualSumOfSquares: Double, penaltyContribution: Double
+        weightedResidualSumOfSquares: Double, penaltyContribution: Double,
+        workingSolveIterationLimit: Int, workingSolveTolerance: Double,
+        inferenceMethod: SparseInferenceMethod
     ) {
         self.designRows = designRows
         self.designColumns = designColumns
@@ -81,6 +102,37 @@ public struct SparseExecutionEvidence: Codable, Sendable, Hashable {
         self.converged = converged
         self.weightedResidualSumOfSquares = weightedResidualSumOfSquares
         self.penaltyContribution = penaltyContribution
+        self.workingSolveIterationLimit = workingSolveIterationLimit
+        self.workingSolveTolerance = workingSolveTolerance
+        self.inferenceMethod = inferenceMethod
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case designRows, designColumns, nonZeroCount, iterations, normalResidualNorm, converged
+        case weightedResidualSumOfSquares, penaltyContribution
+        case workingSolveIterationLimit, workingSolveTolerance, inferenceMethod
+    }
+
+    /// Reads Phase 14 sparse records that predate explicit CGLS settings
+    /// without fabricating an unknown tolerance.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        designRows = try values.decode(Int.self, forKey: .designRows)
+        designColumns = try values.decode(Int.self, forKey: .designColumns)
+        nonZeroCount = try values.decode(Int.self, forKey: .nonZeroCount)
+        iterations = try values.decode(Int.self, forKey: .iterations)
+        normalResidualNorm = try values.decode(Double.self, forKey: .normalResidualNorm)
+        converged = try values.decode(Bool.self, forKey: .converged)
+        weightedResidualSumOfSquares = try values.decode(Double.self, forKey: .weightedResidualSumOfSquares)
+        penaltyContribution = try values.decode(Double.self, forKey: .penaltyContribution)
+        workingSolveIterationLimit = try values.decodeIfPresent(
+            Int.self, forKey: .workingSolveIterationLimit
+        )
+        workingSolveTolerance = try values.decodeIfPresent(
+            Double.self, forKey: .workingSolveTolerance
+        )
+        inferenceMethod = try values.decodeIfPresent(SparseInferenceMethod.self, forKey: .inferenceMethod)
+            ?? .exactDenseCovariance
     }
 }
 
@@ -168,13 +220,18 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
     public let solverPreference: MultivariateSolverPreference
     public let maxIterations: Int
     public let tolerance: Double
+    /// CGLS iteration budget for each sparse WLS/IRLS working solve.
+    public let sparseMaximumIterations: Int
+    /// CGLS relative normal-residual tolerance, independent of IRLS convergence.
+    public let sparseTolerance: Double
 
     public init(
         terms: [MultivariateTermSpecification]? = nil,
         spatialTemporal: SpatialTemporalWorkflowSpecification? = nil,
         defaultKnotCount: Int = 3, penaltyWeight: Double = 1,
         solverPreference: MultivariateSolverPreference = .automatic,
-        maxIterations: Int = 50, tolerance: Double = 1e-8
+        maxIterations: Int = 50, tolerance: Double = 1e-8,
+        sparseMaximumIterations: Int = 10_000, sparseTolerance: Double = 1e-10
     ) {
         self.terms = terms
         self.spatialTemporal = spatialTemporal
@@ -183,11 +240,13 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
         self.solverPreference = solverPreference
         self.maxIterations = maxIterations
         self.tolerance = tolerance
+        self.sparseMaximumIterations = sparseMaximumIterations
+        self.sparseTolerance = sparseTolerance
     }
 
     private enum CodingKeys: String, CodingKey {
         case terms, spatialTemporal, defaultKnotCount, penaltyWeight
-        case solverPreference, maxIterations, tolerance
+        case solverPreference, maxIterations, tolerance, sparseMaximumIterations, sparseTolerance
     }
 
     /// Decodes Phase 13 saved specifications with `.automatic` acceleration,
@@ -201,6 +260,10 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
         solverPreference = try values.decodeIfPresent(MultivariateSolverPreference.self, forKey: .solverPreference) ?? .automatic
         maxIterations = try values.decode(Int.self, forKey: .maxIterations)
         tolerance = try values.decode(Double.self, forKey: .tolerance)
+        sparseMaximumIterations = try values.decodeIfPresent(Int.self, forKey: .sparseMaximumIterations)
+            ?? 10_000
+        sparseTolerance = try values.decodeIfPresent(Double.self, forKey: .sparseTolerance)
+            ?? 1e-10
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -212,11 +275,14 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
         try values.encode(solverPreference, forKey: .solverPreference)
         try values.encode(maxIterations, forKey: .maxIterations)
         try values.encode(tolerance, forKey: .tolerance)
+        try values.encode(sparseMaximumIterations, forKey: .sparseMaximumIterations)
+        try values.encode(sparseTolerance, forKey: .sparseTolerance)
     }
 
     var isValid: Bool {
         guard (0...8).contains(defaultKnotCount), penaltyWeight.isFinite, penaltyWeight > 0,
-              maxIterations > 0, tolerance.isFinite, tolerance > 0 else { return false }
+              maxIterations > 0, tolerance.isFinite, tolerance > 0,
+              sparseMaximumIterations > 0, sparseTolerance.isFinite, sparseTolerance > 0 else { return false }
         guard terms?.allSatisfy(Self.isValid) ?? true,
               spatialTemporal.map(Self.isValid) ?? true else { return false }
         guard let terms else { return true }
@@ -235,7 +301,10 @@ public struct MultivariateModelSpecification: Codable, Sendable, Hashable {
         case .categorical(let value):
             guard value.predictorIndex >= 0 else { return false }
             guard let levels = value.levels else { return true }
-            return (2...64).contains(levels.count) && Set(levels).count == levels.count
+            // The active execution path later applies its dense or sparse
+            // width limit. Keep serialized specifications valid for the
+            // bounded high-cardinality sparse contract.
+            return (2...1_023).contains(levels.count) && Set(levels).count == levels.count
                 && (value.referenceLevel == nil || levels.contains(value.referenceLevel!))
         }
     }
@@ -285,15 +354,59 @@ public struct MultivariateFitResult: Sendable {
 public struct MultivariateInference: Sendable {
     /// `trace((XᵀWX + 2λPᵀP)⁻¹XᵀWX)` at the final fit.
     public let effectiveDegreesOfFreedom: Double
-    /// Fixed-term covariance; Gaussian covariance includes estimated residual scale.
+    /// Exact dense covariance for compact fits. This is empty when
+    /// ``method`` is `.diagonalConditionalApproximation`; consumers must use
+    /// ``coefficientStandardErrors`` or model-level interval methods instead
+    /// of treating a diagonal approximation as a full covariance matrix.
     public let coefficientCovariance: [[Double]]
     public let coefficientStandardErrors: [Double]
+    public let method: SparseInferenceMethod
+    private let diagonalVariances: [Double]?
 
     fileprivate init(effectiveDegreesOfFreedom: Double, coefficientCovariance: [[Double]]) {
         self.effectiveDegreesOfFreedom = effectiveDegreesOfFreedom
         self.coefficientCovariance = coefficientCovariance
         coefficientStandardErrors = coefficientCovariance.indices.map {
             sqrt(max(coefficientCovariance[$0][$0], 0))
+        }
+        method = .exactDenseCovariance
+        diagonalVariances = nil
+    }
+
+    fileprivate init(effectiveDegreesOfFreedom: Double, diagonalVariances: [Double]) {
+        self.effectiveDegreesOfFreedom = effectiveDegreesOfFreedom
+        coefficientCovariance = []
+        coefficientStandardErrors = diagonalVariances.map { sqrt(max($0, 0)) }
+        method = .diagonalConditionalApproximation
+        self.diagonalVariances = diagonalVariances
+    }
+
+    fileprivate func conditionalVariance(for designRow: [Double]) -> Double? {
+        guard designRow.count == coefficientStandardErrors.count else { return nil }
+        switch method {
+        case .exactDenseCovariance:
+            return InferenceMath.quadraticForm(designRow, covariance: coefficientCovariance)
+        case .diagonalConditionalApproximation:
+            guard let diagonalVariances else { return nil }
+            let variance = zip(designRow, diagonalVariances).reduce(0.0) {
+                $0 + $1.0 * $1.0 * $1.1
+            }
+            return variance.isFinite && variance >= 0 ? variance : nil
+        }
+    }
+
+    fileprivate func scaled(by variance: Double) -> MultivariateInference {
+        switch method {
+        case .exactDenseCovariance:
+            return MultivariateInference(
+                effectiveDegreesOfFreedom: effectiveDegreesOfFreedom,
+                coefficientCovariance: coefficientCovariance.map { $0.map { $0 * variance } }
+            )
+        case .diagonalConditionalApproximation:
+            return MultivariateInference(
+                effectiveDegreesOfFreedom: effectiveDegreesOfFreedom,
+                diagonalVariances: (diagonalVariances ?? []).map { $0 * variance }
+            )
         }
     }
 }
@@ -563,7 +676,11 @@ public struct MultivariateModel: Sendable {
             return .init(status: .invalidInput, iterations: 0)
         }
         let requested = resolvedTerms(specification: specification, width: x[0].count)
-        guard !requested.isEmpty, let basis = makeBasis(rows: x, specifications: requested) else {
+        guard !requested.isEmpty, let basis = makeBasis(
+            rows: x, specifications: requested,
+            maximumColumns: maximumDesignColumns(for: specification.solverPreference),
+            maximumCategoricalLevels: maximumCategoricalLevels(for: specification.solverPreference)
+        ) else {
             return .init(status: .invalidInput, iterations: 0)
         }
         let design = basis.design
@@ -600,7 +717,8 @@ public struct MultivariateModel: Sendable {
                     penaltyWeight: 2 * specification.penaltyWeight,
                     preference: specification.solverPreference,
                     sparseRequested: sparseRequested, sparseDesign: nativeSparseDesign,
-                    tolerance: specification.tolerance
+                    sparseMaximumIterations: specification.sparseMaximumIterations,
+                    sparseTolerance: specification.sparseTolerance
                   ) else {
                 return .init(status: .numericalFailure, iterations: iteration - 1,
                              deviance: current.deviance, penalizedObjective: current.value)
@@ -640,10 +758,19 @@ public struct MultivariateModel: Sendable {
             if converged {
                 let linearPredictors = design.map { dot($0, coefficients) }
                 let fitted = linearPredictors.map { mean(eta: $0, family: family) }
-                guard let unitScaleInference = makeInference(
-                    design: design, linearPredictors: linearPredictors, family: family,
-                    penaltyWeight: specification.penaltyWeight, residualScale: 1
-                ) else {
+                let unitScaleInference: MultivariateInference?
+                if solve.backend == .sparseCGLS && design[0].count > denseInferenceColumnLimit {
+                    unitScaleInference = makeDiagonalInference(
+                        design: design, linearPredictors: linearPredictors, family: family,
+                        penaltyWeight: specification.penaltyWeight, residualScale: 1
+                    )
+                } else {
+                    unitScaleInference = makeInference(
+                        design: design, linearPredictors: linearPredictors, family: family,
+                        penaltyWeight: specification.penaltyWeight, residualScale: 1
+                    )
+                }
+                guard let unitScaleInference else {
                     return .init(status: .numericalFailure, iterations: iteration,
                                  deviance: current.deviance, penalizedObjective: current.value,
                                  scoreInfinityNorm: score)
@@ -653,12 +780,7 @@ public struct MultivariateModel: Sendable {
                 let inference: MultivariateInference
                 if family == .gaussian {
                     let variance = residualScale * residualScale
-                    inference = MultivariateInference(
-                        effectiveDegreesOfFreedom: unitScaleInference.effectiveDegreesOfFreedom,
-                        coefficientCovariance: unitScaleInference.coefficientCovariance.map {
-                            $0.map { $0 * variance }
-                        }
-                    )
+                    inference = unitScaleInference.scaled(by: variance)
                 } else {
                     inference = unitScaleInference
                 }
@@ -721,7 +843,7 @@ public struct MultivariateModel: Sendable {
     /// Conditional response-mean standard error, fixed terms and penalty.
     public func standardError(at x: [Double]) -> Double? {
         guard let eta = linearPredictor(x), let row = designRow(for: x),
-              let variance = InferenceMath.quadraticForm(row, covariance: inference.coefficientCovariance)
+              let variance = inference.conditionalVariance(for: row)
         else { return nil }
         return Self.workingPoint(eta: eta, family: family).derivative * sqrt(variance)
     }
@@ -732,7 +854,7 @@ public struct MultivariateModel: Sendable {
     ) -> StatisticalInterval? {
         guard confidenceLevel.isFinite, confidenceLevel > 0, confidenceLevel < 1,
               let eta = linearPredictor(x), let row = designRow(for: x),
-              let variance = InferenceMath.quadraticForm(row, covariance: inference.coefficientCovariance),
+              let variance = inference.conditionalVariance(for: row),
               let z = InferenceMath.normalQuantile(0.5 + confidenceLevel / 2) else { return nil }
         let error = sqrt(variance)
         return StatisticalInterval(
@@ -811,6 +933,14 @@ public struct MultivariateModel: Sendable {
         let deviance: Double
         var isFinite: Bool { value.isFinite && deviance.isFinite }
     }
+
+    /// Full fixed-basis covariance is cubic in the number of coefficients.
+    /// Above this threshold only accepted CSR fits receive the documented
+    /// diagonal conditional approximation.
+    private static let denseInferenceColumnLimit = 256
+    /// This phase deliberately keeps the temporary dense diagnostic design
+    /// bounded while allowing high-cardinality categorical sparse workflows.
+    private static let sparseDesignColumnLimit = 1_024
 
     /// A term-native CSR design. Its values are emitted directly by each
     /// fitted basis, rather than derived by scanning the dense diagnostic
@@ -896,8 +1026,24 @@ public struct MultivariateModel: Sendable {
         return values
     }
 
+    private static func maximumDesignColumns(for preference: MultivariateSolverPreference) -> Int {
+        switch preference {
+        case .denseQR:
+            return denseInferenceColumnLimit
+        case .automatic, .sparseCGLS:
+            return sparseDesignColumnLimit
+        }
+    }
+
+    private static func maximumCategoricalLevels(for preference: MultivariateSolverPreference) -> Int {
+        // Treatment coding omits one reference level. Reserve a small amount
+        // for an intercept and other terms inside the design-width contract.
+        max(2, maximumDesignColumns(for: preference) - 1)
+    }
+
     private static func makeBasis(
-        rows: [[Double]], specifications: [MultivariateTermSpecification]
+        rows: [[Double]], specifications: [MultivariateTermSpecification],
+        maximumColumns: Int, maximumCategoricalLevels: Int
     ) -> (design: [[Double]], builders: [BasisBuilder], ranges: [Range<Int>])? {
         var columns = [[Double](repeating: 1, count: rows.count)]
         var builders: [BasisBuilder] = []
@@ -925,7 +1071,10 @@ public struct MultivariateModel: Sendable {
                 basis = .tensor(first, second, means)
                 values = raw.map { zip($0, means).map(-) }
             case .categorical(let value):
-                guard let categorical = makeCategorical(rows: rows, specification: value),
+                guard let categorical = makeCategorical(
+                    rows: rows, specification: value,
+                    maximumLevels: maximumCategoricalLevels
+                ),
                       let termValues = rows.map({ categorical.centeredValues(at: $0) }).all() else { return nil }
                 basis = .categorical(categorical)
                 values = termValues
@@ -939,7 +1088,7 @@ public struct MultivariateModel: Sendable {
             builders.append(.init(specification: specification, basis: basis))
         }
         let design = rows.indices.map { row in columns.map { $0[row] } }
-        guard design[0].count <= 256 else { return nil }
+        guard design[0].count <= maximumColumns else { return nil }
         return (design, builders, ranges)
     }
 
@@ -963,13 +1112,14 @@ public struct MultivariateModel: Sendable {
     }
 
     private static func makeCategorical(
-        rows: [[Double]], specification: CategoricalTermSpecification
+        rows: [[Double]], specification: CategoricalTermSpecification,
+        maximumLevels: Int
     ) -> CategoricalBasis? {
         guard rows.first?.indices.contains(specification.predictorIndex) == true else { return nil }
         let codes = rows.compactMap { exactInteger($0[specification.predictorIndex]) }
         guard codes.count == rows.count else { return nil }
         let levels = specification.levels ?? Array(Set(codes)).sorted()
-        guard (2...64).contains(levels.count), Set(levels).count == levels.count,
+        guard (2...maximumLevels).contains(levels.count), Set(levels).count == levels.count,
               codes.allSatisfy(levels.contains) else { return nil }
         let reference = specification.referenceLevel ?? levels[0]
         guard levels.contains(reference) else { return nil }
@@ -1087,13 +1237,14 @@ public struct MultivariateModel: Sendable {
     private static func solvePenalizedWeightedLeastSquares(
         design: [[Double]], response: [Double], weights: [Double], penalty: [[Double]], penaltyWeight: Double,
         preference: MultivariateSolverPreference, sparseRequested: Bool,
-        sparseDesign: NativeSparseDesign?, tolerance: Double
+        sparseDesign: NativeSparseDesign?, sparseMaximumIterations: Int,
+        sparseTolerance: Double
     ) -> NumericalSolve? {
         if sparseRequested {
             #if canImport(NumericCoreSparse)
             if let sparseDesign, let sparse = sparsePenalizedSolve(
                 design: sparseDesign, response: response, weights: weights, penaltyWeight: penaltyWeight,
-                tolerance: tolerance
+                maximumIterations: sparseMaximumIterations, tolerance: sparseTolerance
             ) {
                 return sparse
             }
@@ -1164,7 +1315,7 @@ public struct MultivariateModel: Sendable {
     #if canImport(NumericCoreSparse)
     private static func sparsePenalizedSolve(
         design: NativeSparseDesign, response: [Double], weights: [Double], penaltyWeight: Double,
-        tolerance: Double
+        maximumIterations: Int, tolerance: Double
     ) -> NumericalSolve? {
         guard let sparseDesign = try? SparseMatrix<Double>(
             rows: design.rows, cols: design.columns, rowPointers: design.rowPointers,
@@ -1174,8 +1325,7 @@ public struct MultivariateModel: Sendable {
             let result = try SparseStatisticalSolver.penalizedWeightedLeastSquares(
                 design: sparseDesign, response: response, weights: weights, penalty: sparsePenalty,
                 penaltyWeight: penaltyWeight,
-                maxIterations: max(1_000, min(10_000, design.columns * 20)),
-                tolerance: min(tolerance, 1e-10)
+                maxIterations: maximumIterations, tolerance: tolerance
             )
             guard result.converged, result.coefficients.count == design.columns,
                   result.coefficients.allSatisfy(\.isFinite) else { return nil }
@@ -1186,7 +1336,11 @@ public struct MultivariateModel: Sendable {
                     nonZeroCount: design.nonZeroCount, iterations: result.iterations,
                     normalResidualNorm: result.residualNorm, converged: result.converged,
                     weightedResidualSumOfSquares: result.weightedResidualSumOfSquares,
-                    penaltyContribution: result.penaltyContribution
+                    penaltyContribution: result.penaltyContribution,
+                    workingSolveIterationLimit: maximumIterations,
+                    workingSolveTolerance: tolerance,
+                    inferenceMethod: design.columns > denseInferenceColumnLimit
+                        ? .diagonalConditionalApproximation : .exactDenseCovariance
                 )
             )
         } catch {
@@ -1264,6 +1418,44 @@ public struct MultivariateModel: Sendable {
               covariance.flatMap({ $0 }).allSatisfy(\.isFinite) else { return nil }
         return MultivariateInference(
             effectiveDegreesOfFreedom: min(max(edf, 1), Double(count)), coefficientCovariance: covariance
+        )
+    }
+
+    /// Bounded conditional-inference approximation for large accepted CSR
+    /// fits. It keeps only `diag(XᵀWX + 2λPᵀP)⁻¹`, so it does not assert that
+    /// cross-coefficient covariance is zero; it is explicitly a diagonal
+    /// approximation used to keep uncertainty and EDF available without an
+    /// O(p³) factorization or O(p²) retained covariance.
+    private static func makeDiagonalInference(
+        design: [[Double]], linearPredictors: [Double], family: MultivariateResponseFamily,
+        penaltyWeight: Double, residualScale: Double
+    ) -> MultivariateInference? {
+        guard !design.isEmpty, design.count == linearPredictors.count,
+              let count = design.first?.count, count > denseInferenceColumnLimit,
+              design.allSatisfy({ $0.count == count }) else { return nil }
+        var informationDiagonal = [Double](repeating: 0, count: count)
+        for rowIndex in design.indices {
+            let weight = workingPoint(eta: linearPredictors[rowIndex], family: family).weight
+            guard weight.isFinite && weight > 0 else { return nil }
+            for index in design[rowIndex].indices {
+                let value = design[rowIndex][index]
+                informationDiagonal[index] += weight * value * value
+            }
+        }
+        var diagonalVariances = [Double](repeating: 0, count: count)
+        var edf = 0.0
+        for index in informationDiagonal.indices {
+            let information = informationDiagonal[index]
+            let penalized = information + (index == 0 ? 0 : 2 * penaltyWeight)
+            guard information.isFinite, penalized.isFinite, penalized > 0 else { return nil }
+            diagonalVariances[index] = residualScale * residualScale / penalized
+            edf += information / penalized
+        }
+        guard edf.isFinite, edf >= 1 - 1e-8, edf <= Double(count) + 1e-8,
+              diagonalVariances.allSatisfy({ $0.isFinite && $0 >= 0 }) else { return nil }
+        return MultivariateInference(
+            effectiveDegreesOfFreedom: min(max(edf, 1), Double(count)),
+            diagonalVariances: diagonalVariances
         )
     }
 }

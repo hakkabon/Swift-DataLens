@@ -155,6 +155,42 @@ struct MultivariateModelTests {
         #endif
     }
 
+    @Test func highCardinalitySparseFactorsUseBoundedDiagonalInference() throws {
+        #if canImport(NumericCoreSparse)
+        let levels = Array(0..<130)
+        var x: [[Double]] = []
+        var y: [Double] = []
+        for row in 0..<1_300 {
+            let first = row % levels.count
+            let second = (row * 17 + row / levels.count) % levels.count
+            x.append([Double(first), Double(second)])
+            y.append(1 + 0.3 * Double(first) / 129 - 0.2 * Double(second) / 129)
+        }
+        let terms: [MultivariateTermSpecification] = [
+            .categorical(.init(predictorIndex: 0, levels: levels, referenceLevel: 0)),
+            .categorical(.init(predictorIndex: 1, levels: levels, referenceLevel: 0)),
+        ]
+        let fit = try #require(MultivariateModel.fit(
+            trainX: x, trainY: y, family: .gaussian,
+            specification: .init(
+                terms: terms, penaltyWeight: 0.1, solverPreference: .sparseCGLS,
+                maxIterations: 40, tolerance: 1e-8,
+                sparseMaximumIterations: 8_000, sparseTolerance: 1e-9
+            )
+        ).model)
+        #expect(fit.solverBackend == .sparseCGLS)
+        #expect(fit.inference.method == .diagonalConditionalApproximation)
+        #expect(fit.inference.coefficientCovariance.isEmpty)
+        #expect(fit.inference.coefficientStandardErrors.count == 259)
+        #expect(fit.standardError(at: [12, 25])?.isFinite == true)
+        let execution = try #require(fit.sparseExecution)
+        #expect(execution.designColumns == 259)
+        #expect(execution.inferenceMethod == .diagonalConditionalApproximation)
+        #expect(execution.workingSolveIterationLimit == 8_000)
+        #expect(execution.workingSolveTolerance == 1e-9)
+        #endif
+    }
+
     @Test func phase13SpecificationsDecodeWithAutomaticSolverSelection() throws {
         let phase13JSON = """
         {"defaultKnotCount":3,"penaltyWeight":1,"maxIterations":50,"tolerance":1e-08}
@@ -164,6 +200,8 @@ struct MultivariateModelTests {
         )
         #expect(specification.terms == nil)
         #expect(specification.solverPreference == .automatic)
+        #expect(specification.sparseMaximumIterations == 10_000)
+        #expect(specification.sparseTolerance == 1e-10)
     }
 
     @Test func binomialTensorUsesIRLSAndUnifiedValidation() throws {

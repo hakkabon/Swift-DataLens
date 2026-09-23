@@ -96,9 +96,14 @@ Local regression in pure Swift — `import DataLens`.
   `MultivariateSolverPreference` to require either route, and inspect
   `MultivariateModel.solverBackend` and `sparseExecution` (also forwarded by
   `FittedStatisticalModel`) to record the route and the accepted CGLS
-  dimensions, nonzeros, iteration count, normal residual, and working
-  objective. Dense model diagnostics and conditional inference remain dense
-  in this release.
+  dimensions, nonzeros, iteration count, normal residual, working objective,
+  CGLS iteration budget/tolerance, and inference route. Sparse WLS settings
+  (`sparseMaximumIterations` and `sparseTolerance`) are distinct from IRLS
+  convergence settings and persist with the model specification. Categorical
+  sparse designs may contain up to 1,024 coefficients. Up to 256 coefficients
+  retain exact dense fixed-basis covariance; larger accepted CSR fits expose a
+  clearly-labelled diagonal conditional approximation, retaining standard
+  errors and intervals without allocating a dense covariance matrix.
   The representative 12,000-row/253-coefficient factor benchmark fell from
   12.22 s to 9.37 s in the checked release run. Sparse non-convergence falls
   back to QR only under `.automatic`; an explicit `.sparseCGLS` request fails
@@ -302,10 +307,9 @@ swift run Benchmarks # micro-benchmarks (debug numbers; compare relatively)
 - Numerics are a vendored subset (QR + square solve + median + test RNG);
   the old repo keeps the full `LinAlg`/`Regression`/`Descriptive` suites.
   Divergences between the copies need a `docs/DECISIONS.md` entry.
-- Next: extend native sparse execution from categorical-factor operators to
-  sparse basis/score/inference paths, add sparse-aware conditional-inference
-  approximations and preconditioned/factorization options for harder designs,
-  then re-profile
+- Next: remove the remaining bounded dense diagnostic design from the large
+  sparse path, extend CSR emission to wider spline/tensor bases, add
+  preconditioned/factorization options for harder designs, then re-profile
   repeated dense surface workloads before considering Metal. Adaptive-bandwidth
   likelihood, robustness reweighting for likelihood families, further
   families, smoothing-parameter uncertainty, simultaneous bands, bootstrap BCa
